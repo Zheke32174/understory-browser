@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Browser-specific network security config. Unlike the other suite apps
+  (which deny everything because they don't request INTERNET), the
+  browser legitimately makes outbound HTTPS connections — that's the
+  whole point. We:
+    - Permit HTTPS via the system trust anchors.
+    - DENY cleartext (http://) for every domain. The WebView's
+      mixedContentMode = MIXED_CONTENT_NEVER_ALLOW reinforces this at
+      the rendering layer; this config enforces it at the transport
+      layer. A user typing an http:// URL gets a connection refused
+      rather than an unencrypted page.
+    - DO NOT ship user-installed CA trust. Web compat says we use the
+      system store; user CAs would be a sideways trust path
+      attackers exploit (phishing certs).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

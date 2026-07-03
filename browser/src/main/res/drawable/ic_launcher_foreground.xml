@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Browser: a globe with a single meridian + equator. Plain vector. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Globe outline -->
+    <path
+        android:strokeColor="#E0E0E0"
+        android:strokeWidth="3"
+        android:fillColor="#00000000"
+        android:pathData="M54,28 a26,26 0 1,0 0.001,0 Z" />
+    <!-- Equator -->
+    <path
+        android:strokeColor="#E0E0E0"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M28,54 L80,54" />
+    <!-- Meridian (vertical ellipse for visual depth) -->
+    <path
+        android:strokeColor="#E0E0E0"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M54,28 Q42,54 54,80 Q66,54 54,28 Z" />
+</vector>

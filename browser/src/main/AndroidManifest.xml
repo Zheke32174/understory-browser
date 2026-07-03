@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Suite capability registry permissions. Same pattern as other
+      suite apps.
+    -->
+    <permission
+        android:name="com.understory.browser.permission.READ_CAPS"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.understory.passgen.permission.READ_CAPS" />
+    <uses-permission android:name="com.understory.aegis.permission.READ_CAPS" />
+    <uses-permission android:name="com.understory.firewall.permission.READ_CAPS" />
+    <uses-permission android:name="com.understory.backups.permission.READ_CAPS" />
+    <uses-permission android:name="com.understory.antivirus.permission.READ_CAPS" />
+    <uses-permission android:name="com.understory.vaultfolder.permission.READ_CAPS" />
+
+    <!--
+      The browser is the second suite app (after firewall) that
+      legitimately requires INTERNET. The justification is direct: a
+      browser without networking is meaningless. Every other comms
+      channel is still stripped — no SMS, no telephony, no Bluetooth,
+      no NFC, no satellite, no microphone, no camera, no location.
+      Web pages that try to escalate to those surfaces find the
+      permission missing at the platform layer.
+
+      The MVP intentionally does NOT request:
+        - READ_MEDIA_*: no downloads in MVP. Phase 2 adds an opt-in
+          download flow that surfaces SAF picker rather than raw
+          MediaStore access.
+        - POST_NOTIFICATIONS: web push deliberately not supported.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Other network surfaces still stripped. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" tools:node="remove" />
+    <!-- SMS / MMS -->
+    <uses-permission android:name="android.permission.SEND_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_SMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_MMS" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_WAP_PUSH" tools:node="remove" />
+    <!-- Cellular / telephony -->
+    <uses-permission android:name="android.permission.CALL_PHONE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_PRECISE_PHONE_STATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_CALL_LOG" tools:node="remove" />
+    <uses-permission android:name="android.permission.PROCESS_OUTGOING_CALLS" tools:node="remove" />
+    <!-- Satellite -->
+    <uses-permission android:name="android.permission.SATELLITE_COMMUNICATION" tools:node="remove" />
+    <!-- Bluetooth — including web bluetooth surface. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" tools:node="remove" />
+    <!-- NFC — including web NFC surface. -->
+    <uses-permission android:name="android.permission.NFC" tools:node="remove" />
+    <uses-permission android:name="android.permission.NFC_TRANSACTION_EVENT" tools:node="remove" />
+    <!-- Location — web sites cannot escalate to geolocation because we don't have it. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="remove" />
+    <!-- Audio — getUserMedia({audio:true}) cannot escalate. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" tools:node="remove" />
+    <uses-permission android:name="android.permission.CAPTURE_AUDIO_OUTPUT" tools:node="remove" />
+    <uses-permission android:name="android.permission.CAPTURE_AUDIO_HOTWORD" tools:node="remove" />
+    <uses-permission android:name="android.permission.CAPTURE_MEDIA_OUTPUT" tools:node="remove" />
+    <uses-permission android:name="android.permission.CAPTURE_VOICE_COMMUNICATION_OUTPUT" tools:node="remove" />
+    <uses-permission android:name="android.permission.BIND_VOICE_INTERACTION" tools:node="remove" />
+    <uses-permission android:name="android.permission.BIND_TEXT_SERVICE" tools:node="remove" />
+    <!-- Camera — getUserMedia({video:true}) cannot escalate. -->
+    <uses-permission android:name="android.permission.CAMERA" tools:node="remove" />
+    <uses-permission android:name="android.permission.BACKGROUND_CAMERA" tools:node="remove" />
+    <uses-permission android:name="android.permission.SYSTEM_CAMERA" tools:node="remove" />
+    <!-- Biometrics — browser doesn't unlock anything; passgen owns vault. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" tools:node="remove" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" tools:node="remove" />
+    <!-- Storage / media — MVP has no downloads. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" tools:node="remove" />
+    <!-- Notifications / overlays — no web push. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="remove" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" tools:node="remove" />
+    <!-- Package query / install -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" tools:node="remove" />
+    <!-- Service binds -->
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" tools:node="remove" />
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.BIND_QUICK_SETTINGS_TILE" tools:node="remove" />
+    <!-- Sensors -->
+    <uses-permission android:name="android.permission.BODY_SENSORS" tools:node="remove" />
+    <uses-permission android:name="android.permission.BODY_SENSORS_BACKGROUND" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" tools:node="remove" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" tools:node="remove" />
+    <!-- VoIP — WebRTC cannot escalate. -->
+    <uses-permission android:name="android.permission.USE_SIP" tools:node="remove" />
+    <!-- Other -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" tools:node="remove" />
+    <uses-permission android:name="android.permission.GET_ACCOUNTS" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" tools:node="remove" />
+
+    <queries>
+        <!-- Suite siblings — needed for SuiteAttestation cross-verification
+             and for SuiteCapabilityRegistry peer discovery. -->
+        <package android:name="com.understory.passgen" />
+        <package android:name="com.understory.aegis" />
+        <package android:name="com.understory.firewall" />
+        <package android:name="com.understory.backups" />
+        <package android:name="com.understory.antivirus" />
+        <package android:name="com.understory.vaultfolder" />
+        <!-- Lucky Patcher / Xposed / Magisk — Tamper.kt lookups. -->
+        <package android:name="com.chelpus.lackypatch" />
+        <package android:name="com.dimonvideo.luckypatcher" />
+        <package android:name="com.forpda.lp" />
+        <package android:name="com.android.vending.billing.InAppBillingService.LUCK" />
+        <package android:name="com.android.vending.billing.InAppBillingService.LACK" />
+        <package android:name="ru.aaaaaaac.luckypatcher" />
+        <package android:name="uret.jasi2169.patcher" />
+        <package android:name="zone.jasi2169.uretpatcher" />
+        <package android:name="ru.luckypatchers.luckypatcherinstaller" />
+        <package android:name="de.robv.android.xposed.installer" />
+        <package android:name="org.meowcat.edxposed.manager" />
+        <package android:name="org.lsposed.manager" />
+        <package android:name="io.github.lsposed.manager" />
+        <package android:name="com.topjohnwu.magisk" />
+        <package android:name="io.github.huskydg.magisk" />
+        <package android:name="com.kingoapp.apk" />
+        <package android:name="com.koushikdutta.rommanager" />
+        <package android:name="eu.chainfire.supersu" />
+    </queries>
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.Browser"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
+        android:supportsRtl="true">
+
+        <!--
+          Activity-isolation set relaxed for the testing phase. See
+          RELEASE_BLOCKERS.md. Browser-specific note: with the suite-
+          wide ephemeral session policy (CookieManager / WebStorage
+          wipe in onDestroy), the user may want to switch apps and
+          return to the same loaded page during testing — singleTask
+          + recents-visible enables that.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="false"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:theme="@style/Theme.Browser">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Suite capability beacon. -->
+        <provider
+            android:name=".SuiteCapsProvider"
+            android:authorities="com.understory.browser.suitecaps"
+            android:exported="true"
+            android:permission="com.understory.browser.permission.READ_CAPS"
+            android:grantUriPermissions="false" />
+
+    </application>
+
+</manifest>
