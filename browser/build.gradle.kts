@@ -54,6 +54,11 @@ android {
 
     buildFeatures {
         compose = true
+        // BuildConfig.FLAVOR drives the eng-vs-prod gate for the developer
+        // Diagnostics / proxy surfaces (see MainActivity `isEngBuild`). AGP 8
+        // disables app-module BuildConfig generation by default, so it must be
+        // opted back in for the generated FLAVOR field to exist.
+        buildConfig = true
     }
 
     packaging {

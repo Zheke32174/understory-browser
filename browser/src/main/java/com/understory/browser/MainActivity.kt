@@ -28,11 +28,9 @@ import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,36 +39,55 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cookie
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -81,8 +98,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -93,6 +113,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -100,6 +121,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import com.understory.browser.BuildConfig
 import com.understory.security.Diagnostics
 import com.understory.security.DiagnosticsDump
 import com.understory.security.DiagnosticsScreen
@@ -708,89 +730,124 @@ private fun BrowserRoot(
         onPendingLoadConsumed()
     }
 
+    // Progress 0..100 from onProgressChanged; drives the determinate bar and
+    // the reload-vs-stop affordance. Reset to 0 when idle so the bar hides.
+    var progress by remember { mutableStateOf(0) }
+    // Omnibox edit mode: while true the field is an editable TextField focused
+    // for typing; while false it's a compact display of the current host with a
+    // lock glyph. Tap-to-edit flips it on; a committed load or Cancel flips off.
+    var editingUrl by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+
+    val displayUrl = wvRef?.url ?: loadedUrl
+    val starTarget = displayUrl
+    val starOn = starTarget != null && starTarget in bookmarkedKeys
+
+    // Commit the omnibox: normalize + load, drop focus, leave edit mode. Empty
+    // input just closes the editor without touching the loaded page.
+    val commitOmnibox: () -> Unit = {
+        val entered = url.trim()
+        editingUrl = false
+        focusManager.clearFocus()
+        if (entered.isNotEmpty()) {
+            Diagnostics.log("browser.Root", "omnibox go (len=${entered.length})")
+            loadFromInput(entered)
+        }
+    }
+
+    // Real wipe (mirrors onDestroy without killing the Activity): cookies +
+    // storage globally, plus the visible page + its DOM/JS context.
+    val clearNow: () -> Unit = {
+        Diagnostics.log("browser.Root", "Clear now: tap")
+        runCatching {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            WebStorage.getInstance().deleteAllData()
+        }
+        wvRef?.clearCache(true)
+        wvRef?.clearHistory()
+        wvRef?.clearFormData()
+        wvRef?.clearSslPreferences()
+        wvRef?.loadUrl("about:blank")
+        url = ""; loadedUrl = null; jsEnabled = false; pageTitle = null
+        canGoBackState = false; canGoForwardState = false
+        notAUrlHint = false; errorState = null; progress = 0; editingUrl = false
+        showSnack(ctx.getString(R.string.msg_cleared), null, null)
+    }
+
+    val toggleBookmark: () -> Unit = {
+        if (starTarget != null) {
+            Diagnostics.log("browser.Root", "Bookmark toggle: was=${if (starOn) "ON" else "OFF"}")
+            onBookmarkToggle(starTarget, pageTitle)
+            showSnack(
+                ctx.getString(if (starOn) R.string.msg_bookmark_removed else R.string.msg_bookmarked),
+                null, null,
+            )
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+
+        // ---- Top browser toolbar: back/close · omnibox · reload/stop · overflow
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            OutlinedTextField(
-                value = url,
-                onValueChange = { url = it; if (notAUrlHint) notAUrlHint = false },
-                label = { Text(stringResource(R.string.hint_url), color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Uri,
-                    imeAction = ImeAction.Go,
-                ),
-                keyboardActions = KeyboardActions(onGo = {
-                    if (url.isNotEmpty()) loadFromInput(url)
-                }),
-                trailingIcon = if (url.isNotEmpty()) {
-                    @Composable {
-                        IconButton(onClick = {
-                            Diagnostics.log("browser.Root", "URL clear: tap")
-                            url = ""
-                            notAUrlHint = false
-                        }) {
-                            Icon(
-                                imageVector = Icons.Filled.Clear,
-                                contentDescription = stringResource(R.string.cd_clear_url),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                } else null,
-                modifier = Modifier.weight(1f),
-            )
-            Button(
-                onClick = {
-                    Diagnostics.log("browser.Root", "Go: tap (urlLen=${url.length})")
-                    if (url.isNotEmpty()) loadFromInput(url)
-                },
-                modifier = Modifier.height(56.dp),
-            ) { Text(stringResource(R.string.action_go)) }
-        }
-
-        if (notAUrlHint) {
-            Text(
-                stringResource(R.string.msg_not_a_web_address),
-                color = UnderstoryTheme.semantic.warning,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
-            )
-        }
-
-        // Navigation row — only meaningful once a page has loaded.
-        if (loadedUrl != null) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = UnderstoryTheme.spacing.xs, vertical = UnderstoryTheme.spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.xs),
             ) {
+                // Back if the page has history; otherwise a close/home affordance
+                // that clears the viewer back to the start surface.
+                val canBack = canGoBackState && loadedUrl != null
                 NavIconButton(
-                    icon = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.cd_nav_back),
-                    enabled = canGoBackState,
+                    icon = if (canBack) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Close,
+                    contentDescription = if (canBack) stringResource(R.string.cd_nav_back)
+                    else stringResource(R.string.cd_close),
+                    enabled = true,
                     onClick = {
-                        Diagnostics.log("browser.Root", "Nav back: tap")
-                        wvRef?.goBack()
+                        if (canBack) {
+                            Diagnostics.log("browser.Root", "Toolbar back: tap")
+                            wvRef?.goBack()
+                        } else if (loadedUrl != null) {
+                            clearNow()
+                        }
                     },
                 )
-                NavIconButton(
-                    icon = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = stringResource(R.string.cd_nav_forward),
-                    enabled = canGoForwardState,
-                    onClick = {
-                        Diagnostics.log("browser.Root", "Nav forward: tap")
-                        wvRef?.goForward()
+
+                Omnibox(
+                    text = url,
+                    displayUrl = displayUrl,
+                    editing = editingUrl,
+                    focusRequester = focusRequester,
+                    onTextChange = { url = it; if (notAUrlHint) notAUrlHint = false },
+                    onBeginEdit = {
+                        editingUrl = true
+                        // Seed the field with the current URL so the user edits
+                        // rather than retypes; select-all is the platform default.
+                        url = displayUrl ?: ""
                     },
+                    onGo = commitOmnibox,
+                    onClear = {
+                        url = ""
+                        notAUrlHint = false
+                    },
+                    modifier = Modifier.weight(1f),
                 )
+
+                // Reload becomes Stop while loading. Disabled with no page.
                 NavIconButton(
-                    icon = if (loading) Icons.Filled.Close else Icons.Filled.Refresh,
+                    icon = if (loading) Icons.Filled.Stop else Icons.Filled.Refresh,
                     contentDescription = if (loading) stringResource(R.string.cd_stop)
                     else stringResource(R.string.cd_reload),
-                    enabled = wvRef != null,
+                    enabled = loadedUrl != null,
                     onClick = {
                         if (loading) {
                             Diagnostics.log("browser.Root", "Stop load: tap")
@@ -801,275 +858,150 @@ private fun BrowserRoot(
                         }
                     },
                 )
-                NavIconButton(
-                    icon = Icons.Filled.OpenInNew,
-                    contentDescription = stringResource(R.string.cd_open_in_default),
-                    enabled = wvRef != null || loadedUrl != null,
-                    onClick = {
-                        val target = wvRef?.url ?: loadedUrl
-                        if (target != null) openInDefault(ctx, target, showSnack)
-                    },
-                )
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable {
+
+                // Overflow menu.
+                Box {
+                    NavIconButton(
+                        icon = Icons.Filled.MoreVert,
+                        contentDescription = stringResource(R.string.cd_overflow),
+                        enabled = true,
+                        onClick = { showMenu = true },
+                    )
+                    OverflowMenu(
+                        expanded = showMenu,
+                        onDismiss = { showMenu = false },
+                        hasPage = loadedUrl != null,
+                        jsEnabled = jsEnabled,
+                        cookiesFirstParty = cookiesFirstParty,
+                        bookmarkCount = bookmarks.size,
+                        engBuild = proxyEnabled,
+                        onShare = {
                             val target = wvRef?.url ?: loadedUrl
-                            if (target != null) {
+                            if (target != null) shareLink(ctx, target, showSnack)
+                        },
+                        onOpenInDefault = {
+                            val target = wvRef?.url ?: loadedUrl
+                            if (target != null) openInDefault(ctx, target, showSnack)
+                        },
+                        onFind = {
+                            findActive = true
+                        },
+                        onClearNow = clearNow,
+                        onToggleJs = {
+                            val host = hostOf(wvRef?.url ?: loadedUrl)
+                            if (host != null) {
+                                val nowOn = !jsEnabled
+                                jsEnabled = nowOn
+                                BrowserSettings.setJsAllowed(ctx, host, nowOn)
                                 Diagnostics.log("browser.Root",
-                                    "Copy URL: tap (len=${target.length})")
-                                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                cm?.setPrimaryClip(ClipData.newPlainText("URL", target))
-                                showSnack(ctx.getString(R.string.msg_url_copied), null, null)
+                                    "JS toggle: now ${if (nowOn) "ALLOW" else "OFF"} (persisted per-site)")
+                                wvRef?.settings?.javaScriptEnabled = nowOn
+                                wvRef?.reload()
                             }
-                        }
-                        .semantics { contentDescription = ctx.getString(R.string.cd_copy_url) }
-                        .padding(horizontal = 6.dp, vertical = 6.dp),
-                ) {
-                    Text(
-                        pageTitle?.takeIf { it.isNotBlank() } ?: (wvRef?.url ?: loadedUrl ?: ""),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        },
+                        onToggleCookies = {
+                            cookiesFirstParty = !cookiesFirstParty
+                            BrowserSettings.setFirstPartyCookies(ctx, cookiesFirstParty)
+                            Diagnostics.log("browser.Root",
+                                "Cookie toggle: first-party now ${if (cookiesFirstParty) "ON" else "OFF"}")
+                            runCatching {
+                                CookieManager.getInstance().setAcceptCookie(cookiesFirstParty)
+                                if (!cookiesFirstParty) {
+                                    CookieManager.getInstance().removeAllCookies(null)
+                                }
+                            }
+                        },
+                        onManageJs = onOpenJsAllowlist,
+                        onBookmarks = onOpenBookmarks,
+                        onDiagnostics = onDiagnostics,
+                        onProxy = onOpenProxy,
                     )
                 }
-                val starTarget = wvRef?.url ?: loadedUrl
-                val starOn = starTarget != null && starTarget in bookmarkedKeys
-                NavIconButton(
-                    icon = if (starOn) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                    contentDescription = if (starOn) stringResource(R.string.cd_bookmark_on)
-                    else stringResource(R.string.cd_bookmark_off),
-                    enabled = starTarget != null,
-                    tint = if (starOn) MaterialTheme.colorScheme.primary else null,
-                    onClick = {
-                        if (starTarget != null) {
-                            Diagnostics.log("browser.Root",
-                                "Bookmark toggle: was=${if (starOn) "ON" else "OFF"}")
-                            onBookmarkToggle(starTarget, pageTitle)
-                            showSnack(
-                                ctx.getString(
-                                    if (starOn) R.string.msg_bookmark_removed
-                                    else R.string.msg_bookmarked
-                                ),
-                                null, null,
-                            )
-                        }
-                    },
-                )
-                NavIconButton(
-                    icon = if (findActive) Icons.Filled.Search else Icons.Outlined.Search,
-                    contentDescription = stringResource(R.string.cd_find_toggle),
-                    enabled = wvRef != null,
-                    tint = if (findActive) MaterialTheme.colorScheme.primary else null,
-                    onClick = {
-                        Diagnostics.log("browser.Root",
-                            "Find toggle: now ${if (!findActive) "ON" else "OFF"}")
-                        findActive = !findActive
-                        if (!findActive) {
-                            findQuery = ""
-                            findCurrent = -1
-                            findTotal = -1
-                            wvRef?.clearMatches()
-                        }
-                    },
-                )
             }
         }
 
-        // Find-in-page bar.
-        if (findActive) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedTextField(
-                    value = findQuery,
-                    onValueChange = { newValue ->
-                        findQuery = newValue
-                        if (newValue.isEmpty()) {
-                            findCurrent = -1
-                            findTotal = -1
-                            wvRef?.clearMatches()
-                        } else {
-                            wvRef?.findAllAsync(newValue)
-                        }
-                    },
-                    label = { Text(stringResource(R.string.hint_find), color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    when {
-                        findTotal < 0 -> ""
-                        findTotal == 0 -> "0"
-                        else -> "${findCurrent + 1} / $findTotal"
-                    },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                )
-                NavIconButton(
-                    icon = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.cd_find_prev),
-                    enabled = findTotal > 0,
-                    onClick = {
-                        Diagnostics.log("browser.Root", "Find prev: tap")
-                        wvRef?.findNext(false)
-                    },
-                )
-                NavIconButton(
-                    icon = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = stringResource(R.string.cd_find_next),
-                    enabled = findTotal > 0,
-                    onClick = {
-                        Diagnostics.log("browser.Root", "Find next: tap")
-                        wvRef?.findNext(true)
-                    },
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            // Per-site JS opt-in. Long-press opens the allowlist manager.
-            JsToggleButton(
-                jsEnabled = jsEnabled,
-                enabled = loadedUrl != null,
-                onClick = {
-                    val host = hostOf(wvRef?.url ?: loadedUrl)
-                    if (host != null) {
-                        val nowOn = !jsEnabled
-                        jsEnabled = nowOn
-                        BrowserSettings.setJsAllowed(ctx, host, nowOn)
-                        Diagnostics.log("browser.Root",
-                            "JS toggle: now ${if (nowOn) "ALLOW" else "OFF"} (persisted per-site)")
-                        wvRef?.settings?.javaScriptEnabled = nowOn
-                        wvRef?.reload()
-                    }
-                },
-                onLongClick = onOpenJsAllowlist,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedButton(
-                onClick = {
-                    cookiesFirstParty = !cookiesFirstParty
-                    BrowserSettings.setFirstPartyCookies(ctx, cookiesFirstParty)
-                    Diagnostics.log("browser.Root",
-                        "Cookie toggle: first-party now ${if (cookiesFirstParty) "ON" else "OFF"}")
-                    runCatching {
-                        CookieManager.getInstance().setAcceptCookie(cookiesFirstParty)
-                        if (!cookiesFirstParty) {
-                            CookieManager.getInstance().removeAllCookies(null)
-                        }
-                    }
-                },
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(if (cookiesFirstParty) stringResource(R.string.cookies_first_party) else stringResource(R.string.cookies_off))
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            OutlinedButton(
-                onClick = {
-                    // Real wipe (mirrors onDestroy without killing the
-                    // Activity): cookies + storage globally, plus the
-                    // visible page + its DOM/JS context.
-                    Diagnostics.log("browser.Root", "Clear now: tap")
-                    runCatching {
-                        CookieManager.getInstance().removeAllCookies(null)
-                        CookieManager.getInstance().flush()
-                        WebStorage.getInstance().deleteAllData()
-                    }
-                    wvRef?.clearCache(true)
-                    wvRef?.clearHistory()
-                    wvRef?.clearFormData()
-                    wvRef?.clearSslPreferences()
-                    wvRef?.loadUrl("about:blank")
-                    url = ""; loadedUrl = null; jsEnabled = false; pageTitle = null
-                    canGoBackState = false; canGoForwardState = false
-                    notAUrlHint = false
-                    errorState = null
-                    showSnack(ctx.getString(R.string.msg_cleared), null, null)
-                },
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.action_clear_now)) }
-            OutlinedButton(
-                onClick = onOpenBookmarks,
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.action_bookmarks, bookmarks.size)) }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            // Proxy entry point only in eng builds — prod ships no overlay
-            // surface at all (design §6; nothing honest to show in phase α).
-            if (proxyEnabled) {
-                OutlinedButton(
-                    onClick = onOpenProxy,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    val i2p = com.understory.overlay.i2p.I2pStatus.state
-                    val overlayLabel = when (val s = i2p) {
-                        is com.understory.overlay.i2p.I2pStatus.State.Ready ->
-                            stringResource(R.string.action_proxy_i2p_ready, s.httpPort)
-                        com.understory.overlay.i2p.I2pStatus.State.Starting ->
-                            stringResource(R.string.action_proxy_starting)
-                        is com.understory.overlay.i2p.I2pStatus.State.Error ->
-                            stringResource(R.string.action_proxy_err)
-                        else -> stringResource(R.string.action_proxy)
-                    }
-                    Text(overlayLabel)
-                }
-            }
-            OutlinedButton(
-                onClick = onDiagnostics,
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.action_diagnostics)) }
-        }
-
-        if (loading) {
-            Spacer(Modifier.height(2.dp))
-            Box(
-                modifier = Modifier.fillMaxWidth()
-                    .height(2.dp)
-                    .background(MaterialTheme.colorScheme.primary),
+        // Search-off honesty chip: shown under the toolbar when the typed text
+        // isn't a web address (this is a viewer, not a search engine).
+        if (notAUrlHint) {
+            Text(
+                stringResource(R.string.msg_not_a_web_address),
+                color = UnderstoryTheme.semantic.warning,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(
+                    horizontal = UnderstoryTheme.spacing.md,
+                    vertical = UnderstoryTheme.spacing.xs,
+                ),
             )
         }
 
-        // The WebView host. Only instantiated once a URL has been loaded —
-        // before that we show a placeholder (also avoids the Compose +
-        // WebView surface-ordering flash on first launch).
-        if (loadedUrl == null) {
-            Box(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    stringResource(R.string.placeholder_main),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    modifier = Modifier.padding(20.dp),
-                )
-            }
+        // ---- Thin determinate progress bar under the toolbar; hidden when idle.
+        val animatedProgress by animateFloatAsState(
+            targetValue = (progress.coerceIn(0, 100)) / 100f,
+            label = "loadProgress",
+        )
+        if (loading && progress in 1..99) {
+            LinearProgressIndicator(
+                progress = { animatedProgress },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.Transparent,
+            )
         } else {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // Reserve the 2dp so content doesn't jump when the bar appears.
+            Spacer(Modifier.height(2.dp))
+        }
+
+        // ---- Find-in-page bar (opens above the content when active).
+        if (findActive) {
+            FindInPageBar(
+                query = findQuery,
+                current = findCurrent,
+                total = findTotal,
+                onQueryChange = { newValue ->
+                    findQuery = newValue
+                    if (newValue.isEmpty()) {
+                        findCurrent = -1; findTotal = -1
+                        wvRef?.clearMatches()
+                    } else {
+                        wvRef?.findAllAsync(newValue)
+                    }
+                },
+                onPrev = {
+                    Diagnostics.log("browser.Root", "Find prev: tap")
+                    wvRef?.findNext(false)
+                },
+                onNext = {
+                    Diagnostics.log("browser.Root", "Find next: tap")
+                    wvRef?.findNext(true)
+                },
+                onClose = {
+                    findActive = false
+                    findQuery = ""; findCurrent = -1; findTotal = -1
+                    wvRef?.clearMatches()
+                },
+            )
+        }
+
+        // ---- Content area: WebView, or the start/home surface, or the error panel.
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (loadedUrl == null) {
+                BrowserHome(
+                    bookmarks = bookmarks,
+                    onPickBookmark = { picked -> loadFromInput(picked) },
+                    onOpenBar = {
+                        editingUrl = true
+                        url = ""
+                    },
+                )
+            } else {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { factoryCtx ->
                         buildHardenedWebView(factoryCtx).also { wv ->
                             wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
                             wv.webViewClient = HardenedWebViewClient(
-                                onLoadStart = { loading = true },
-                                onLoadFinish = { loading = false },
+                                onLoadStart = { loading = true; progress = 0 },
+                                onLoadFinish = { loading = false; progress = 0 },
                                 onNavState = { v ->
                                     canGoBackState = v?.canGoBack() ?: false
                                     canGoForwardState = v?.canGoForward() ?: false
@@ -1080,6 +1012,9 @@ private fun BrowserRoot(
                                     if (committed != null && committed != loadedUrl) {
                                         loadedUrl = committed
                                     }
+                                    // Reflect the committed URL into the omnibox
+                                    // when the user isn't mid-edit.
+                                    if (!editingUrl && committed != null) url = committed
                                 },
                                 onPageStartedForUrl = {
                                     // A new main-frame navigation succeeded
@@ -1093,6 +1028,7 @@ private fun BrowserRoot(
                             )
                             wv.webChromeClient = HardenedWebChromeClient(
                                 onTitle = { t -> pageTitle = t },
+                                onProgress = { p -> progress = p },
                             )
                             wv.setDownloadListener { downloadUrl, _, _, _, _ ->
                                 Diagnostics.log("browser.Root", "download blocked (view-only)")
@@ -1138,7 +1074,514 @@ private fun BrowserRoot(
             }
         }
 
-        SuiteStatusFooter(modifier = Modifier.padding(8.dp))
+        // ---- Slim bottom browser bar: back / forward / reload / bookmark.
+        // Present once a page is loaded so the app reads as a browser even
+        // one-handed. (Single-view quarantine viewer: no tabs, by design.)
+        if (loadedUrl != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 2.dp,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = UnderstoryTheme.spacing.sm),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    NavIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.cd_nav_back),
+                        enabled = canGoBackState,
+                        onClick = { wvRef?.goBack() },
+                    )
+                    NavIconButton(
+                        icon = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = stringResource(R.string.cd_nav_forward),
+                        enabled = canGoForwardState,
+                        onClick = { wvRef?.goForward() },
+                    )
+                    NavIconButton(
+                        icon = if (loading) Icons.Filled.Stop else Icons.Filled.Refresh,
+                        contentDescription = if (loading) stringResource(R.string.cd_stop)
+                        else stringResource(R.string.cd_reload),
+                        enabled = true,
+                        onClick = { if (loading) wvRef?.stopLoading() else wvRef?.reload() },
+                    )
+                    NavIconButton(
+                        icon = if (starOn) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                        contentDescription = if (starOn) stringResource(R.string.cd_bookmark_on)
+                        else stringResource(R.string.cd_bookmark_off),
+                        enabled = starTarget != null,
+                        tint = if (starOn) MaterialTheme.colorScheme.primary else null,
+                        onClick = toggleBookmark,
+                    )
+                }
+            }
+        }
+
+        // Dev/debug suite status strip: eng builds only. The prod ("shipping")
+        // face never carries it — it's a wiring smoke test, not a user surface.
+        if (proxyEnabled) {
+            SuiteStatusFooter(modifier = Modifier.padding(UnderstoryTheme.spacing.sm))
+        }
+    }
+}
+
+/**
+ * The address bar. Two faces sharing one row height so the toolbar never
+ * reflows: a compact display chip (lock glyph + host, tap to edit) when idle,
+ * and a focused single-line editor when [editing]. Honest hint: this is a
+ * viewer, not a search box, so the placeholder is "Enter a URL".
+ */
+@Composable
+private fun Omnibox(
+    text: String,
+    displayUrl: String?,
+    editing: Boolean,
+    focusRequester: FocusRequester,
+    onTextChange: (String) -> Unit,
+    onBeginEdit: () -> Unit,
+    onGo: () -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val ctx = LocalContext.current
+    val shape = RoundedCornerShape(50)
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = shape,
+        modifier = modifier.heightIn(min = 44.dp),
+    ) {
+        if (editing) {
+            TextField(
+                value = text,
+                onValueChange = onTextChange,
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        stringResource(R.string.hint_url),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.Public,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                trailingIcon = if (text.isNotEmpty()) {
+                    @Composable {
+                        IconButton(onClick = onClear) {
+                            Icon(
+                                imageVector = Icons.Filled.Clear,
+                                contentDescription = stringResource(R.string.cd_clear_url),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                } else null,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Go,
+                ),
+                keyboardActions = KeyboardActions(onGo = { onGo() }, onDone = { onGo() }),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                ),
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+            )
+            LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+        } else {
+            val isHttps = displayUrl?.startsWith("https://", ignoreCase = true) == true
+            val host = hostOf(displayUrl) ?: displayUrl
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onBeginEdit() }
+                    .semantics { contentDescription = ctx.getString(R.string.cd_edit_url) }
+                    .padding(horizontal = UnderstoryTheme.spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.sm),
+            ) {
+                if (displayUrl == null) {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        stringResource(R.string.omnibox_empty),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (isHttps) Icons.Filled.Lock else Icons.Filled.Public,
+                        contentDescription = if (isHttps) stringResource(R.string.cd_secure_https) else null,
+                        tint = if (isHttps) UnderstoryTheme.semantic.success
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        host ?: "",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The toolbar overflow menu (Share / Open in default / Find / Clear / JS / cookies / …). */
+@Composable
+private fun OverflowMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    hasPage: Boolean,
+    jsEnabled: Boolean,
+    cookiesFirstParty: Boolean,
+    bookmarkCount: Int,
+    engBuild: Boolean,
+    onShare: () -> Unit,
+    onOpenInDefault: () -> Unit,
+    onFind: () -> Unit,
+    onClearNow: () -> Unit,
+    onToggleJs: () -> Unit,
+    onToggleCookies: () -> Unit,
+    onManageJs: () -> Unit,
+    onBookmarks: () -> Unit,
+    onDiagnostics: () -> Unit,
+    onProxy: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        MenuRow(Icons.Filled.Share, stringResource(R.string.menu_share), enabled = hasPage) {
+            onDismiss(); onShare()
+        }
+        MenuRow(Icons.Filled.OpenInNew, stringResource(R.string.menu_open_in_default), enabled = hasPage) {
+            onDismiss(); onOpenInDefault()
+        }
+        MenuRow(Icons.Filled.Search, stringResource(R.string.menu_find), enabled = hasPage) {
+            onDismiss(); onFind()
+        }
+        HorizontalDivider()
+        MenuRow(
+            Icons.Filled.Code,
+            if (jsEnabled) stringResource(R.string.menu_js_on) else stringResource(R.string.menu_js_off),
+            enabled = hasPage,
+        ) { onDismiss(); onToggleJs() }
+        MenuRow(
+            Icons.Filled.Cookie,
+            if (cookiesFirstParty) stringResource(R.string.menu_cookies_on) else stringResource(R.string.menu_cookies_off),
+            enabled = true,
+        ) { onDismiss(); onToggleCookies() }
+        MenuRow(Icons.Filled.Tune, stringResource(R.string.menu_manage_js), enabled = true) {
+            onDismiss(); onManageJs()
+        }
+        HorizontalDivider()
+        MenuRow(Icons.Filled.Bookmarks, stringResource(R.string.menu_bookmarks, bookmarkCount), enabled = true) {
+            onDismiss(); onBookmarks()
+        }
+        MenuRow(Icons.Filled.DeleteSweep, stringResource(R.string.menu_clear), enabled = true) {
+            onDismiss(); onClearNow()
+        }
+        // Developer-only entries: eng flavor only. The prod build shows NEITHER
+        // the Diagnostics screen entry nor the network-proxy overlay entry.
+        if (engBuild) {
+            HorizontalDivider()
+            MenuRow(Icons.Filled.Shield, stringResource(R.string.menu_proxy), enabled = true) {
+                onDismiss(); onProxy()
+            }
+            MenuRow(Icons.Filled.VisibilityOff, stringResource(R.string.menu_diagnostics), enabled = true) {
+                onDismiss(); onDiagnostics()
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(label) },
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+            )
+        },
+        enabled = enabled,
+        onClick = onClick,
+    )
+}
+
+/** The find-in-page bar (matches count + prev/next + close). */
+@Composable
+private fun FindInPageBar(
+    query: String,
+    current: Int,
+    total: Int,
+    onQueryChange: (String) -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = UnderstoryTheme.spacing.sm, vertical = UnderstoryTheme.spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextField(
+                value = query,
+                onValueChange = onQueryChange,
+                placeholder = { Text(stringResource(R.string.hint_find), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                singleLine = true,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                when {
+                    total < 0 -> ""
+                    total == 0 -> "0"
+                    else -> "${current + 1} / $total"
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = UnderstoryTheme.spacing.xs),
+            )
+            NavIconButton(
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = stringResource(R.string.cd_find_prev),
+                enabled = total > 0,
+                onClick = onPrev,
+            )
+            NavIconButton(
+                icon = Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = stringResource(R.string.cd_find_next),
+                enabled = total > 0,
+                onClick = onNext,
+            )
+            NavIconButton(
+                icon = Icons.Filled.Close,
+                contentDescription = stringResource(R.string.cd_find_toggle),
+                enabled = true,
+                onClick = onClose,
+            )
+        }
+    }
+}
+
+/**
+ * The start / home surface shown before any page loads. A branded header, a
+ * short honest description of what this viewer is (and is NOT), the three
+ * standing-policy cards (JS-off, ephemeral, capture-blocked), and — when the
+ * user has bookmarks — a quick-launch list. Replaces the wall-of-text
+ * placeholder so an empty viewer still reads as an intentional browser home.
+ */
+@Composable
+private fun BrowserHome(
+    bookmarks: List<Bookmark>,
+    onPickBookmark: (String) -> Unit,
+    onOpenBar: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(UnderstoryTheme.spacing.lg),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(UnderstoryTheme.spacing.xl))
+        Icon(
+            imageVector = Icons.Filled.Shield,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(48.dp),
+        )
+        Spacer(Modifier.height(UnderstoryTheme.spacing.md))
+        Text(
+            stringResource(R.string.home_title),
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(UnderstoryTheme.spacing.xs))
+        Text(
+            stringResource(R.string.home_tagline),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(UnderstoryTheme.spacing.lg))
+        Button(
+            onClick = onOpenBar,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+        ) {
+            Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
+            Text(stringResource(R.string.home_hint))
+        }
+
+        Spacer(Modifier.height(UnderstoryTheme.spacing.lg))
+        HomeInfoCard(
+            icon = Icons.Filled.Code,
+            title = stringResource(R.string.home_card_js_title),
+            body = stringResource(R.string.home_card_js_body),
+        )
+        Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
+        HomeInfoCard(
+            icon = Icons.Filled.DeleteSweep,
+            title = stringResource(R.string.home_card_ephemeral_title),
+            body = stringResource(R.string.home_card_ephemeral_body),
+        )
+        Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
+        HomeInfoCard(
+            icon = Icons.Filled.VisibilityOff,
+            title = stringResource(R.string.home_card_capture_title),
+            body = stringResource(R.string.home_card_capture_body),
+        )
+
+        if (bookmarks.isNotEmpty()) {
+            Spacer(Modifier.height(UnderstoryTheme.spacing.lg))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Bookmarks,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(UnderstoryTheme.spacing.sm))
+                Text(
+                    stringResource(R.string.home_bookmarks_header),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
+                tonalElevation = 1.dp,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column {
+                    // Cap the home quick-list; the full list lives in Bookmarks.
+                    bookmarks.take(6).forEachIndexed { index, bookmark ->
+                        if (index > 0) HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPickBookmark(bookmark.url) }
+                                .padding(
+                                    horizontal = UnderstoryTheme.spacing.lg,
+                                    vertical = UnderstoryTheme.spacing.md,
+                                ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
+                        ) {
+                            Icon(
+                                Icons.Filled.Public,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    bookmark.title,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    bookmark.url,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(UnderstoryTheme.spacing.xl))
+    }
+}
+
+@Composable
+private fun HomeInfoCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    body: String,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(UnderstoryTheme.spacing.lg),
+            horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(UnderstoryTheme.spacing.xs))
+                Text(
+                    body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -1171,64 +1614,6 @@ private fun NavIconButton(
 }
 
 /**
- * The per-site JS toggle. An outlined-button look built on a Box so it can
- * carry a long-press (open the allowlist manager) that a Material
- * OutlinedButton can't. Merged semantics announce the current state and
- * the long-press affordance to TalkBack.
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun JsToggleButton(
-    jsEnabled: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val ctx = LocalContext.current
-    val outline = MaterialTheme.colorScheme.outline
-    val labelColor = if (enabled) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-    Box(
-        modifier = modifier
-            .height(48.dp)
-            .background(Color.Transparent, MaterialTheme.shapes.small)
-            .combinedClickable(
-                enabled = enabled,
-                onClick = onClick,
-                onLongClick = onLongClick,
-            )
-            .semantics {
-                contentDescription = ctx.getString(
-                    R.string.cd_js_toggle,
-                    ctx.getString(if (jsEnabled) R.string.js_state_on else R.string.js_state_off),
-                )
-            }
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        androidx.compose.foundation.layout.Box(
-            modifier = Modifier
-                .matchParentSize()
-                .androidxOutline(outline, enabled),
-        )
-        Text(
-            if (jsEnabled) stringResource(R.string.js_on) else stringResource(R.string.js_off),
-            color = labelColor,
-            style = MaterialTheme.typography.labelLarge,
-        )
-    }
-}
-
-/** Draw a 1dp outline border matching the OutlinedButton look. */
-private fun Modifier.androidxOutline(color: Color, enabled: Boolean): Modifier =
-    this.border(
-        width = 1.dp,
-        color = if (enabled) color else color.copy(alpha = 0.4f),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
-    )
-
-/**
  * The confirmation interstitial (design §2.3) — the injection neutralizer.
  * An inbound Intent can put a URL on this screen; only the Open button
  * loads it. Host is emphasized so a look-alike domain is legible.
@@ -1256,66 +1641,124 @@ private fun IntakeInterstitial(
                 .padding(pad)
                 .verticalScroll(rememberScrollState())
                 .padding(UnderstoryTheme.spacing.lg),
-            verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                stringResource(R.string.intake_heading),
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                stringResource(R.string.intake_sub),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (normalized == null) {
-                Text(
-                    stringResource(R.string.intake_no_link),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = UnderstoryTheme.semantic.warning,
-                )
-            } else {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = MaterialTheme.shapes.large,
+                tonalElevation = 2.dp,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(UnderstoryTheme.spacing.xl),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
                 ) {
-                    SelectionContainer {
+                    Icon(
+                        imageVector = Icons.Filled.Shield,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(40.dp),
+                    )
+                    Text(
+                        stringResource(R.string.intake_heading),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center,
+                    )
+
+                    if (normalized == null) {
                         Text(
-                            text = emphasizedUrl(normalized),
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(UnderstoryTheme.spacing.md),
+                            stringResource(R.string.intake_no_link),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = UnderstoryTheme.semantic.warning,
+                            textAlign = TextAlign.Center,
                         )
+                    } else {
+                        // The link, host emphasized, in an inset panel so a
+                        // look-alike domain is legible before the user commits.
+                        Surface(
+                            color = MaterialTheme.colorScheme.background,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            SelectionContainer {
+                                Text(
+                                    text = emphasizedUrl(normalized),
+                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(UnderstoryTheme.spacing.md),
+                                )
+                            }
+                        }
+                        // Standing-policy badge: JavaScript is off for this load.
+                        JsOffBadge()
                     }
+
+                    Text(
+                        stringResource(R.string.intake_sub),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        intake.sourceLabel?.let { stringResource(R.string.intake_source_from, it) }
+                            ?: stringResource(R.string.intake_source_unknown),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+
+                    Spacer(Modifier.height(UnderstoryTheme.spacing.xs))
+
+                    if (normalized != null) {
+                        Button(
+                            onClick = { onOpen(normalized) },
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                        ) { Text(stringResource(R.string.action_open_in_safe_view)) }
+                        OutlinedButton(
+                            onClick = { onCopy(normalized) },
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                        ) { Text(stringResource(R.string.action_copy_link)) }
+                    }
+                    OutlinedButton(
+                        onClick = onCancel,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                    ) { Text(stringResource(R.string.action_cancel)) }
                 }
             }
-
-            Text(
-                intake.sourceLabel?.let { stringResource(R.string.intake_source_from, it) }
-                    ?: stringResource(R.string.intake_source_unknown),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
-
-            if (normalized != null) {
-                Button(
-                    onClick = { onOpen(normalized) },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                ) { Text(stringResource(R.string.action_open_in_safe_view)) }
-                OutlinedButton(
-                    onClick = { onCopy(normalized) },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                ) { Text(stringResource(R.string.action_copy_link)) }
-            }
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-            ) { Text(stringResource(R.string.action_cancel)) }
         }
+    }
+}
+
+/** A small "JavaScript off" pill — the interstitial's standing-policy badge. */
+@Composable
+private fun JsOffBadge() {
+    Row(
+        modifier = Modifier
+            .background(
+                UnderstoryTheme.semantic.successContainer,
+                RoundedCornerShape(50),
+            )
+            .padding(horizontal = UnderstoryTheme.spacing.md, vertical = UnderstoryTheme.spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.xs),
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Code,
+            contentDescription = null,
+            tint = UnderstoryTheme.semantic.success,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            stringResource(R.string.intake_badge_js_off),
+            style = MaterialTheme.typography.labelMedium,
+            color = UnderstoryTheme.semantic.success,
+        )
     }
 }
 
@@ -1588,8 +2031,15 @@ private fun JsAllowlistScreen(onBack: () -> Unit) {
 private fun hostOf(url: String?): String? =
     url?.let { runCatching { Uri.parse(it).host?.lowercase() }.getOrNull() }
 
-/** True on the eng flavor (applicationId ends `.eng`) — gates the proxy surface. */
-private fun isEngBuild(ctx: Context): Boolean = ctx.packageName.endsWith(".eng")
+/**
+ * True on the eng product flavor — the single gate for every developer-only
+ * surface (the Diagnostics screen entry and the network-proxy overlay). Reads
+ * the generated [BuildConfig.FLAVOR] rather than sniffing the applicationId, so
+ * the shipping ("prod") build has NO diagnostics affordance and NO proxy entry
+ * at all. [ctx] is unused now but kept so call sites don't churn.
+ */
+@Suppress("UNUSED_PARAMETER")
+private fun isEngBuild(ctx: Context): Boolean = BuildConfig.FLAVOR == "eng"
 
 /** First http(s) URL inside a free-form shared string, or null. */
 private fun firstUrlIn(text: String): String? {
@@ -1648,6 +2098,31 @@ private fun openInDefault(
         ctx.startActivity(Intent.createChooser(i, ctx.getString(R.string.chooser_open_in_browser)))
     }.onFailure {
         showSnack(ctx.getString(R.string.msg_no_browser), null, null)
+    }
+}
+
+/**
+ * Share the current URL as plain text via the system share sheet. A text-only
+ * share of an https link — no page content, no secrets — the honest "send this
+ * link somewhere" exit that complements open-in-default.
+ */
+private fun shareLink(
+    ctx: Context,
+    url: String,
+    showSnack: (String, String?, (() -> Unit)?) -> Unit,
+) {
+    Diagnostics.log("browser.handoff", "share link: tap")
+    val i = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, url)
+    }
+    runCatching {
+        ctx.startActivity(
+            Intent.createChooser(i, ctx.getString(R.string.share_chooser_title))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }.onFailure {
+        showSnack(ctx.getString(R.string.msg_no_share), null, null)
     }
 }
 
@@ -1798,10 +2273,15 @@ private class HardenedWebViewClient(
 
 private class HardenedWebChromeClient(
     val onTitle: (String?) -> Unit = {},
+    val onProgress: (Int) -> Unit = {},
 ) : WebChromeClient() {
 
     override fun onReceivedTitle(view: WebView?, title: String?) {
         onTitle(title)
+    }
+
+    override fun onProgressChanged(view: WebView?, newProgress: Int) {
+        onProgress(newProgress)
     }
 
     override fun onGeolocationPermissionsShowPrompt(

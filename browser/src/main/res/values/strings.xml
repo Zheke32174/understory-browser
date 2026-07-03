@@ -13,12 +13,13 @@
     <!-- Chooser-entry verb for the share/VIEW aliases (reads a verb, not the app name). -->
     <string name="alias_open_label">Open in Safe View</string>
 
-    <!-- URL bar / nav row -->
-    <string name="hint_url">https://</string>
+    <!-- Toolbar / omnibox -->
+    <string name="hint_url">Enter a URL</string>
     <string name="action_go">Go</string>
     <string name="cd_clear_url">Clear address</string>
     <string name="cd_nav_back">Back</string>
     <string name="cd_nav_forward">Forward</string>
+    <string name="cd_close">Close viewer</string>
     <string name="cd_reload">Reload</string>
     <string name="cd_stop">Stop loading</string>
     <string name="cd_open_in_default">Open in default browser</string>
@@ -26,6 +27,27 @@
     <string name="cd_bookmark_off">Add bookmark</string>
     <string name="cd_find_toggle">Find in page</string>
     <string name="cd_copy_url">Copy address</string>
+    <string name="cd_overflow">More options</string>
+    <string name="cd_secure_https">Secure connection (https)</string>
+    <string name="cd_edit_url">Edit address</string>
+    <!-- The home/omnibox resting label before any page is loaded. -->
+    <string name="omnibox_empty">Enter a URL</string>
+
+    <!-- Overflow menu items -->
+    <string name="menu_share">Share link</string>
+    <string name="menu_open_in_default">Open in default browser</string>
+    <string name="menu_find">Find in page</string>
+    <string name="menu_clear">Clear now</string>
+    <string name="menu_js_on">JavaScript: on for this site</string>
+    <string name="menu_js_off">JavaScript: off (default)</string>
+    <string name="menu_cookies_on">Cookies: first-party</string>
+    <string name="menu_cookies_off">Cookies: off</string>
+    <string name="menu_manage_js">Allowed JavaScript sites</string>
+    <string name="menu_bookmarks">Bookmarks (%1$d)</string>
+    <string name="menu_diagnostics">Diagnostics (eng)</string>
+    <string name="menu_proxy">Network proxy (eng)</string>
+    <string name="share_chooser_title">Share link</string>
+    <string name="msg_no_share">No app to share to</string>
 
     <!-- Find bar -->
     <string name="hint_find">Find in page</string>
@@ -62,8 +84,17 @@
     <string name="chooser_open_in_browser">Open in browser</string>
     <string name="msg_not_a_web_address">That doesn\'t look like a web address. Safe View doesn\'t search the web — paste a full link.</string>
 
-    <!-- Empty / placeholder -->
-    <string name="placeholder_main">Type an https:// URL above and tap Go.\n\nJS is off by default for every site — the JS toggle opts the current site in (persisted allowlist). Cookies: first-party only per toggle, third-party always blocked.\n\nCleared when you close the app, or tap Clear now. Switching apps does NOT clear it.\n\nSafe Browsing is on when the device\'s WebView provider supports it. Screenshots are blocked here; to capture a suspicious page, open it in your default browser.</string>
+    <!-- Home / start surface (shown before any page is loaded) -->
+    <string name="home_title">Hardened viewer</string>
+    <string name="home_tagline">A quarantined, single-page web viewer — not a search engine.</string>
+    <string name="home_hint">Type an https:// address in the bar above and press Go.</string>
+    <string name="home_card_js_title">JavaScript is off by default</string>
+    <string name="home_card_js_body">Every site loads with scripting disabled. Turn it on per-site from the menu; the choice is remembered in an allowlist.</string>
+    <string name="home_card_ephemeral_title">Nothing is kept</string>
+    <string name="home_card_ephemeral_body">Cookies, storage, and history are wiped when you close the viewer or tap Clear now. Third-party cookies are always blocked.</string>
+    <string name="home_card_capture_title">Capture is blocked</string>
+    <string name="home_card_capture_body">Screenshots are disabled here. To capture a suspicious page, open it in your default browser from the menu.</string>
+    <string name="home_bookmarks_header">Bookmarks</string>
 
     <!-- Intake interstitial -->
     <string name="intake_heading">Open this link in the hardened viewer?</string>
@@ -74,6 +105,7 @@
     <string name="action_open_in_safe_view">Open in Safe View</string>
     <string name="action_copy_link">Copy link</string>
     <string name="action_cancel">Cancel</string>
+    <string name="intake_badge_js_off">JavaScript off</string>
 
     <!-- First-run VIEW opt-in -->
     <string name="optin_title">Also offer Safe View when you tap links?</string>
