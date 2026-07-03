@@ -76,15 +76,38 @@ import com.understory.security.TestingMode
 
 /**
  * Hardened browser MVP — single Activity, single WebView, locked-down
- * defaults. Phase-1 scope:
- *   - JavaScript OFF by default (toggleable per session).
- *   - file://, content://, mixed-content all denied.
- *   - No save passwords, no save form data, no geolocation.
- *   - All web permission requests (camera/mic/location/midi/etc.) refused.
+ * defaults. Phase-1 hardening matrix (each line is a defense-matrix
+ * item; RELEASE_BLOCKERS.md "Browser" section references this list):
+ *   - JavaScript OFF by default for every navigation. Explicit per-site
+ *     opt-in toggle in the toolbar, backed by a persisted host allowlist
+ *     in [BrowserSettings]. Cross-site navigation re-derives the policy
+ *     for the target host before the new document commits.
+ *   - file:// and content:// loads blocked entirely: allowFileAccess /
+ *     allowContentAccess / allowFileAccessFromFileURLs /
+ *     allowUniversalAccessFromFileURLs all false, AND
+ *     shouldOverrideUrlLoading refuses every non-https scheme.
+ *   - Third-party cookies always blocked
+ *     (CookieManager.setAcceptThirdPartyCookies(wv, false)); first-party
+ *     cookies OFF by default behind a persisted settings toggle. Both
+ *     wiped on Activity destroy either way.
+ *   - Mixed content blocked (MIXED_CONTENT_NEVER_ALLOW) + cleartext
+ *     denied at the transport layer (network_security_config).
+ *   - Safe Browsing enabled where the WebView provider supports it;
+ *     degrades gracefully (silently absent) on providers that lack the
+ *     feature — no fallback network call of our own.
+ *   - Geolocation / camera / mic auto-denied: settings geolocation off,
+ *     onGeolocationPermissionsShowPrompt denies, onPermissionRequest
+ *     denies every web permission. The Android permissions themselves
+ *     are also stripped in the manifest.
+ *   - No form autofill, no saved passwords in the WebView
+ *     (saveFormData / savePassword false). Credential fill defers to
+ *     the system autofill service (passgen/aegis integration path).
  *   - All cookies + storage cleared on Activity destroy.
  *   - SSL errors rejected hard (no proceed-anyway dialog).
- *   - No file chooser, no window-create.
+ *   - No file chooser, no window-create, no popups.
  *   - INTERNET permission required (only suite app besides firewall).
+ *   - Overlay-proxy plumbing (ProxyScreen + overlay-* providers) rides
+ *     on WebView ProxyController and is unaffected by the above.
  *
  * Deferred to phase 2:
  *   - Cromite-fork integration (the SUITE_DESIGN target).
@@ -317,7 +340,14 @@ private fun BrowserRoot(
     val ctx = LocalContext.current
     var url by remember { mutableStateOf("") }
     var loadedUrl by remember { mutableStateOf<String?>(null) }
+    // Effective JS state for the current page. Derived from the
+    // persisted per-site allowlist on every navigation (explicit loads
+    // here, in-page navigations via HardenedWebViewClient) — never
+    // carried over from the previous site.
     var jsEnabled by remember { mutableStateOf(false) }
+    // First-party cookie acceptance — persisted toggle, default off.
+    // Third-party cookies stay blocked unconditionally.
+    var cookiesFirstParty by remember { mutableStateOf(BrowserSettings.getFirstPartyCookies(ctx)) }
     var loading by remember { mutableStateOf(false) }
     // WebView reference + nav state. We capture the WebView on factory
     // construction so the toolbar buttons (back / forward / reload-stop)
@@ -346,6 +376,7 @@ private fun BrowserRoot(
     LaunchedEffect(pendingLoad) {
         val target = pendingLoad ?: return@LaunchedEffect
         val normalized = normalizeUrl(target)
+        jsEnabled = BrowserSettings.isJsAllowed(ctx, hostOf(normalized))
         loadedUrl = normalized
         url = normalized
         onPendingLoadConsumed()
@@ -369,6 +400,7 @@ private fun BrowserRoot(
                 keyboardActions = KeyboardActions(onGo = {
                     if (url.isNotEmpty()) {
                         val normalized = normalizeUrl(url)
+                        jsEnabled = BrowserSettings.isJsAllowed(ctx, hostOf(normalized))
                         loadedUrl = normalized
                         url = normalized
                     }
@@ -396,6 +428,7 @@ private fun BrowserRoot(
                     if (url.isNotEmpty()) {
                         val normalized = normalizeUrl(url)
                         Diagnostics.log("browser.Root", "load url scheme=${normalized.substringBefore("://", "?")}")
+                        jsEnabled = BrowserSettings.isJsAllowed(ctx, hostOf(normalized))
                         loadedUrl = normalized
                         url = normalized
                     }
@@ -569,18 +602,62 @@ private fun BrowserRoot(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // Per-site JS opt-in. Only meaningful with a page loaded —
+            // there is no "JS on for whatever comes next" state; every
+            // navigation starts from the allowlist (default off).
             OutlinedButton(
+                enabled = loadedUrl != null,
                 onClick = {
-                    jsEnabled = !jsEnabled; loadedUrl = loadedUrl?.let { it }
-                    Diagnostics.log("browser.Root", "JS toggle: now ${if (jsEnabled) "ON" else "OFF"}")
+                    val host = hostOf(wvRef?.url ?: loadedUrl)
+                    if (host != null) {
+                        val nowOn = !jsEnabled
+                        jsEnabled = nowOn
+                        BrowserSettings.setJsAllowed(ctx, host, nowOn)
+                        Diagnostics.log("browser.Root",
+                            "JS toggle: now ${if (nowOn) "ALLOW" else "OFF"} (persisted per-site)")
+                        // Reload so the current document actually runs
+                        // (or stops running) under the new policy —
+                        // flipping the setting alone doesn't re-execute
+                        // an already-parsed page.
+                        wvRef?.settings?.javaScriptEnabled = nowOn
+                        wvRef?.reload()
+                    }
                 },
                 modifier = Modifier.weight(1f),
             ) {
-                Text(if (jsEnabled) "JS: on (per session)" else "JS: off (default)")
+                Text(if (jsEnabled) "JS: on (this site)" else "JS: off (default)")
             }
             OutlinedButton(
                 onClick = {
-                    // Hard-clear: blank the URL, drop loaded URL, drop JS toggle.
+                    cookiesFirstParty = !cookiesFirstParty
+                    BrowserSettings.setFirstPartyCookies(ctx, cookiesFirstParty)
+                    Diagnostics.log("browser.Root",
+                        "Cookie toggle: first-party now ${if (cookiesFirstParty) "ON" else "OFF"}")
+                    // Applies live; buildHardenedWebView re-applies the
+                    // persisted value on the next launch. Turning off
+                    // also drops anything accepted so far — a revoke,
+                    // not just a stop-accepting.
+                    runCatching {
+                        CookieManager.getInstance().setAcceptCookie(cookiesFirstParty)
+                        if (!cookiesFirstParty) {
+                            CookieManager.getInstance().removeAllCookies(null)
+                        }
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (cookiesFirstParty) "Cookies: 1st-party" else "Cookies: off")
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            OutlinedButton(
+                onClick = {
+                    // Hard-clear: blank the URL, drop loaded URL, drop JS state.
+                    // The persisted JS allowlist survives — it's a deliberate
+                    // per-site opt-in like a bookmark, not session state.
                     Diagnostics.log("browser.Root", "Clear session: tap")
                     url = ""; loadedUrl = null; jsEnabled = false
                     pageTitle = null
@@ -590,15 +667,15 @@ private fun BrowserRoot(
                 },
                 modifier = Modifier.weight(1f),
             ) { Text("Clear session") }
+            OutlinedButton(
+                onClick = onOpenBookmarks,
+                modifier = Modifier.weight(1f),
+            ) { Text("Bookmarks (${bookmarks.size})") }
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            OutlinedButton(
-                onClick = onOpenBookmarks,
-                modifier = Modifier.weight(1f),
-            ) { Text("Bookmarks (${bookmarks.size})") }
             OutlinedButton(
                 onClick = onOpenProxy,
                 modifier = Modifier.weight(1f),
@@ -663,8 +740,11 @@ private fun BrowserRoot(
             ) {
                 Text(
                     "Type an https:// URL above and tap Go.\n\n" +
-                        "JS is off by default per session — toggle to enable for this " +
-                        "session only. Clear session wipes URL + JS state.",
+                        "JS is off by default for every site — the JS toggle opts the " +
+                        "current site in (persisted allowlist). Cookies: first-party " +
+                        "only per toggle, third-party always blocked, all wiped on exit.\n\n" +
+                        "Safe Browsing is on when the device's WebView provider " +
+                        "supports it; older providers silently lack it.",
                     color = Color(0xFF707070),
                     fontSize = 12.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -687,6 +767,19 @@ private fun BrowserRoot(
                             onNavState = { v ->
                                 canGoBackState = v?.canGoBack() ?: false
                                 canGoForwardState = v?.canGoForward() ?: false
+                            },
+                            jsAllowed = { host -> BrowserSettings.isJsAllowed(ctx, host) },
+                            onJsApplied = { allowed -> jsEnabled = allowed },
+                            onUrlCommitted = { committed ->
+                                // Keep the explicit-load request in sync with
+                                // where the WebView actually is. Without this,
+                                // any recomposition of the update lambda after
+                                // a link navigation would see wv.url !=
+                                // loadedUrl and boomerang-load the original
+                                // URL over the page the user navigated to.
+                                if (committed != null && committed != loadedUrl) {
+                                    loadedUrl = committed
+                                }
                             },
                         )
                         wv.webChromeClient = HardenedWebChromeClient(
@@ -851,6 +944,14 @@ private fun BookmarkRow(
 }
 
 /**
+ * Host key for the per-site JS allowlist — lowercase host, or null when
+ * the string doesn't parse to one. Allowlist lookups treat null as "not
+ * allowed", so unparseable input fails closed.
+ */
+private fun hostOf(url: String?): String? =
+    url?.let { runCatching { Uri.parse(it).host?.lowercase() }.getOrNull() }
+
+/**
  * Resolve a user-typed string to a navigable URL. Bare hosts get
  * https:// prepended; never http://. Anything that doesn't look like a
  * URL after normalization is rejected (returned as-is for the WebView
@@ -909,12 +1010,16 @@ private fun buildHardenedWebView(ctx: android.content.Context): WebView {
     s.databaseEnabled = false
     s.domStorageEnabled = false
 
-    // Block third-party cookies on this WebView. The system default
-    // varies by platform/version (and was true on older Androids);
-    // the explicit per-WebView call is the only way to be sure. Pure
-    // tracking surface — first-party cookies still work for sessions.
+    // Cookie policy. Third-party: always blocked — pure tracking
+    // surface, no toggle. First-party: per the persisted settings
+    // toggle, default off. The system defaults vary by platform/
+    // version (third-party was even true on older Androids), so both
+    // calls are explicit. Whatever gets accepted is still wiped on
+    // Activity destroy — the toggle governs within-session acceptance.
     runCatching {
-        CookieManager.getInstance().setAcceptThirdPartyCookies(wv, false)
+        val cm = CookieManager.getInstance()
+        cm.setAcceptCookie(BrowserSettings.getFirstPartyCookies(ctx))
+        cm.setAcceptThirdPartyCookies(wv, false)
     }
 
     // SafeBrowsing — Google's malicious-URL list. Modern Android has
@@ -936,14 +1041,32 @@ private class HardenedWebViewClient(
     val onLoadStart: (WebView?) -> Unit,
     val onLoadFinish: (WebView?) -> Unit,
     val onNavState: (WebView?) -> Unit,
+    val jsAllowed: (String?) -> Boolean,
+    val onJsApplied: (Boolean) -> Unit,
+    val onUrlCommitted: (String?) -> Unit,
 ) : WebViewClient() {
 
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-        // Refuse non-https navigation. The transport layer would block
-        // it (network-security-config), but failing earlier here keeps
-        // the failure mode crisp.
-        val uri = request?.url ?: return true
+        // Refuse non-https navigation — this is what makes file:// and
+        // content:// (and intent:, javascript:, etc.) unreachable even
+        // if a page tries to navigate there. The settings layer
+        // (allowFileAccess=false and friends) and the transport layer
+        // (network-security-config) would each block their slice too,
+        // but failing earliest keeps the failure mode crisp.
+        val req = request ?: return true
+        val uri = req.url ?: return true
         if (!uri.scheme.equals("https", ignoreCase = true)) return true
+        // Re-derive the JS policy for the *target* host before the
+        // navigation proceeds — per-site allowlist, default off. Doing
+        // it here (not onPageStarted) means the new document never
+        // starts executing under the previous site's policy. Main frame
+        // only: a cross-origin iframe must not flip the top-level
+        // page's policy in either direction.
+        if (req.isForMainFrame) {
+            val allow = jsAllowed(uri.host?.lowercase())
+            view?.settings?.javaScriptEnabled = allow
+            onJsApplied(allow)
+        }
         return false  // let the WebView load the URL
     }
 
@@ -967,6 +1090,18 @@ private class HardenedWebViewClient(
         // is actually finished loading).
         super.doUpdateVisitedHistory(view, url, isReload)
         onNavState(view)
+        onUrlCommitted(url)
+        // Back/forward navigations don't pass through
+        // shouldOverrideUrlLoading, so re-apply the per-site JS policy
+        // on every commit as well. Late for the very first script of a
+        // committed document, but history entries were already policy-
+        // checked when first loaded; this closes the drift for the
+        // history-traversal path.
+        val allow = jsAllowed(hostOf(url))
+        if (view?.settings?.javaScriptEnabled != allow) {
+            view?.settings?.javaScriptEnabled = allow
+            onJsApplied(allow)
+        }
     }
 
     override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
@@ -987,6 +1122,18 @@ private class HardenedWebChromeClient(
         // never use it as a trust signal (security comes from FLAG_SECURE
         // + the locked-down scheme/SSL handling, not from title text).
         onTitle(title)
+    }
+
+    override fun onGeolocationPermissionsShowPrompt(
+        origin: String?,
+        callback: android.webkit.GeolocationPermissions.Callback?,
+    ) {
+        // Auto-deny, never remember. Geolocation is already off in
+        // WebSettings and the app holds no location permission, but
+        // denying at the prompt layer means the page gets a clean
+        // PERMISSION_DENIED instead of hanging on a dialog that will
+        // never be shown.
+        callback?.invoke(origin, false, false)
     }
 
     override fun onPermissionRequest(request: PermissionRequest?) {

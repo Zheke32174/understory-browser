@@ -4,6 +4,24 @@ Hardened minimal browser with overlay-network proxy support (i2p / lokinet / ygg
 
 Status: **alpha** (functional; working the release-blockers list in understory-common).
 
+## Hardened WebView config (defense-matrix reference)
+
+Implements the RELEASE_BLOCKERS.md "Browser" hardening items. Canonical per-item list lives in the `MainActivity.kt` KDoc header; summary:
+
+| Item | Where |
+| --- | --- |
+| JavaScript OFF by default; per-site opt-in toggle backed by a persisted host allowlist | `BrowserSettings.isJsAllowed`/`setJsAllowed`; policy re-derived per navigation in `HardenedWebViewClient` |
+| `file://` / `content://` blocked entirely | `allowFileAccess`/`allowContentAccess`/`allowFileAccessFromFileURLs`/`allowUniversalAccessFromFileURLs` all false + `shouldOverrideUrlLoading` refuses every non-https scheme |
+| Third-party cookies always blocked; first-party per settings toggle (default off) | `CookieManager.setAcceptThirdPartyCookies(wv, false)` + `setAcceptCookie(BrowserSettings.getFirstPartyCookies(...))`; all cookies wiped on destroy |
+| Mixed content blocked | `MIXED_CONTENT_NEVER_ALLOW` + cleartext denied in `network_security_config.xml` |
+| Safe Browsing enabled | `WebSettingsCompat.setSafeBrowsingEnabled(true)` behind `WebViewFeature` check — degrades gracefully (silently absent) when the device's WebView provider lacks the feature |
+| Geolocation / camera / mic auto-denied | `onGeolocationPermissionsShowPrompt` denies, `onPermissionRequest` denies; the Android permissions are also stripped in the manifest |
+| No form autofill / no saved passwords in the WebView | `saveFormData`/`savePassword` false; credential fill defers to the system autofill service (passgen/aegis path) |
+| Ephemeral sessions | cookies, storage, cache, history, form data wiped on Activity destroy |
+| SSL errors rejected hard; no popups, no file chooser, no downloads | `HardenedWebViewClient`/`HardenedWebChromeClient` |
+
+The overlay-proxy plumbing (ProxyScreen + `overlay-i2p`/`overlay-lokinet`/`overlay-yggdrasil`) rides on WebView `ProxyController` and is orthogonal to the hardening above.
+
 ## Build
 
 Requires JDK 17+ and the Android SDK with platform 35 + build-tools 35.0.0.
@@ -25,3 +43,18 @@ Part of the **Understory Suite** — rootless, in-bounds, local-first Android se
 Shared modules vendored here for a self-contained build: `common-security/` (+ `common-backup/`, `overlay-*/` where used) and `keystore/` (pinned suite debug keystore — cert digest is the Tamper/SuiteAttestation pin). **Do not edit shared modules in this repo.** Their canonical home is [`understory-common`](https://github.com/Zheke32174/understory-common); propagate changes with its `tools/sync-common.sh`.
 
 Suite-level docs (SUITE_DESIGN, SUITE_ROADMAP, RELEASE_BLOCKERS, SAMSUNG_QUIRKS, BlackArch defense matrix + runbooks) live in `understory-common`.
+
+## Verify your install
+
+Before trusting the app, confirm the APK you are about to install (or did install) is signed by the suite key. With Android build-tools on any machine:
+
+```bash
+apksigner verify --print-certs the-downloaded.apk | grep -i 'SHA-256'
+```
+
+The signer certificate SHA-256 digest must be exactly one of the two suite pins (single source of truth: `common-security/.../SuitePins.kt`):
+
+- **Debug** builds (CI artifacts; committed suite debug keystore): `aba68a81a0d63b5549794e586875a4f04e6dba3a6fe25d363e04eb75f46df69e`
+- **Release** builds (offline release keystore): `59a3dee7feb8262170e4dcabb3dbe7bc323abe8715ab49f5bed5133046a45c4a`
+
+Any other digest means the APK was not signed by the suite keys — do not install it. The apps also enforce these pins at runtime (Tamper self-check + SuiteAttestation cross-check of installed siblings), but verifying before install is the stronger position. Signing doctrine: `docs/SIGNING.md` in understory-common.

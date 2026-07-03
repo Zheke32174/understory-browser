@@ -17,6 +17,61 @@ object BrowserSettings {
     private const val PREF = "browser_settings"
     private const val K_BOOKMARKS = "bookmarks_v1"
     private const val K_I2P_PROVIDER = "i2p_provider"
+    private const val K_JS_ALLOWLIST = "js_allowlist_v1"
+    private const val K_FIRST_PARTY_COOKIES = "first_party_cookies"
+
+    /**
+     * Per-site JavaScript allowlist, keyed by lowercase host. JS is OFF
+     * by default for every navigation; a host on this list gets JS
+     * re-enabled whenever it is the top-level page. Keyed by host (not
+     * full URL) because the opt-in the user is expressing is "this site
+     * needs scripts" — per-URL entries would silently multiply. Like
+     * bookmarks, this is a deliberate, persistent user act; it is not
+     * part of the wiped-on-destroy session state.
+     */
+    fun isJsAllowed(ctx: Context, host: String?): Boolean =
+        host != null && host.lowercase() in getJsAllowlist(ctx)
+
+    fun setJsAllowed(ctx: Context, host: String, allowed: Boolean) {
+        val key = host.lowercase()
+        val current = getJsAllowlist(ctx).toMutableSet()
+        val changed = if (allowed) current.add(key) else current.remove(key)
+        if (!changed) return
+        val json = JSONArray()
+        for (h in current) json.put(h)
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putString(K_JS_ALLOWLIST, json.toString())
+            .apply()
+    }
+
+    fun getJsAllowlist(ctx: Context): Set<String> {
+        val raw = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getString(K_JS_ALLOWLIST, null) ?: return emptySet()
+        return runCatching {
+            val arr = JSONArray(raw)
+            val out = HashSet<String>(arr.length())
+            for (i in 0 until arr.length()) out += arr.getString(i)
+            out
+        }.getOrDefault(emptySet())
+    }
+
+    /**
+     * First-party cookie acceptance. Default OFF — cookies are a
+     * tracking surface first and a login convenience second. Third-party
+     * cookies are unconditionally blocked in MainActivity regardless of
+     * this toggle, and whatever is accepted here is still wiped on
+     * Activity destroy (ephemeral-session posture) — the toggle governs
+     * within-session acceptance only.
+     */
+    fun getFirstPartyCookies(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getBoolean(K_FIRST_PARTY_COOKIES, false)
+
+    fun setFirstPartyCookies(ctx: Context, on: Boolean) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putBoolean(K_FIRST_PARTY_COOKIES, on)
+            .apply()
+    }
 
     /**
      * The user's I2P provider preference, identified by
