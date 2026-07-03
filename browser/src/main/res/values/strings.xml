@@ -9,7 +9,7 @@
   The package id (com.understory.browser) is unchanged — only the label.
 -->
 <resources>
-    <string name="app_name">Safe View</string>
+    <string name="app_name">Understory Safe View</string>
     <!-- Chooser-entry verb for the share/VIEW aliases (reads a verb, not the app name). -->
     <string name="alias_open_label">Open in Safe View</string>
 
