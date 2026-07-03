@@ -30,6 +30,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -91,7 +92,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -361,7 +362,7 @@ class MainActivity : ComponentActivity() {
         return when (intent.action) {
             Intent.ACTION_SEND -> {
                 if (intent.type != "text/plain") return null
-                val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return PendingIntake(null, sourceLabel, text)
+                val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return PendingIntake(null, sourceLabel, null)
                 PendingIntake(firstUrlIn(text), sourceLabel, text)
             }
             Intent.ACTION_VIEW -> {
