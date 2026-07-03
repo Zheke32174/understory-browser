@@ -22,6 +22,7 @@ object BrowserSettings {
     private const val K_VIEW_FILTER_ENABLED = "view_filter_enabled"
     private const val K_FIRST_RUN_DONE = "first_run_done"
     private const val K_EXTERNAL_HANDOFF = "external_handoff"
+    private const val K_DEFAULT_MODE = "default_browse_mode"
 
     /**
      * Per-site JavaScript allowlist, keyed by lowercase host. JS is OFF
@@ -138,6 +139,27 @@ object BrowserSettings {
     fun setFirstPartyCookies(ctx: Context, on: Boolean) {
         ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
             .putBoolean(K_FIRST_PARTY_COOKIES, on)
+            .apply()
+    }
+
+    /**
+     * The per-app default browsing mode applied to a NEW tab the user
+     * opens from the home surface. Stored as the [BrowseMode] name; an
+     * unrecognized or absent value falls back to [BrowseMode.HARDENED]
+     * — the suite's fail-safe posture (a corrupt pref never silently
+     * relaxes the sandbox). Note this governs only user-opened tabs:
+     * a link arriving through the intake doorway is ALWAYS Hardened,
+     * independent of this setting (see MainActivity's intake path).
+     */
+    fun getDefaultMode(ctx: Context): BrowseMode {
+        val raw = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getString(K_DEFAULT_MODE, null) ?: return BrowseMode.HARDENED
+        return runCatching { BrowseMode.valueOf(raw) }.getOrDefault(BrowseMode.HARDENED)
+    }
+
+    fun setDefaultMode(ctx: Context, mode: BrowseMode) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putString(K_DEFAULT_MODE, mode.name)
             .apply()
     }
 

@@ -29,11 +29,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -52,6 +56,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmarks
@@ -104,7 +109,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -175,9 +184,17 @@ import kotlinx.coroutines.launch
  * confirmation interstitial) and the exit (open-in-default-browser
  * hand-off), plus honest feedback on every previously-silent dead-end.
  *
+ * P1 adds tabs (a single reused WebView driven by per-tab saved-state
+ * bundles; see [TabManager] / [Tab]) and a per-app-default + per-tab
+ * browsing mode ([BrowseMode]): the current locked-down defaults are the
+ * HARDENED mode, and an opt-in STANDARD mode relaxes JS/cookies/downloads/
+ * cache for ordinary browsing while keeping the invariant posture
+ * (FLAG_SECURE, mixed-content block, cleartext block, SSL-hard-reject,
+ * third-party-cookie block, Safe Browsing, wipe-on-exit). Links arriving
+ * through the intake doorway are ALWAYS opened Hardened.
+ *
  * Deferred to phase 2:
  *   - Cromite-fork integration (the SUITE_DESIGN target).
- *   - Tabs.
  *   - Fingerprint randomization.
  *   - DNS-over-HTTPS toggle.
  */
@@ -509,7 +526,15 @@ private fun BrowserAppRoot(
     var showBookmarks by rememberSaveable { mutableStateOf(false) }
     var showJsAllowlist by rememberSaveable { mutableStateOf(false) }
     var showProxy by rememberSaveable { mutableStateOf(false) }
+    var showTabs by rememberSaveable { mutableStateOf(false) }
     var pendingLoad by remember { mutableStateOf<String?>(null) }
+
+    // The open-tab set + active pointer. Held in a plain `remember`: the
+    // Activity declares configChanges for orientation/screenSize/uiMode, so
+    // it is not recreated on rotation and this survives config changes. A
+    // single reused WebView (in BrowserRoot) is driven by the active tab's
+    // saved state (see the switch effect there).
+    val tabs = remember { TabManager(BrowserSettings.getDefaultMode(ctx)) }
 
     // First-run VIEW-filter opt-in card. Shows once, on the very first
     // launch, only when there's no intake to handle (an intake is a more
@@ -550,7 +575,12 @@ private fun BrowserAppRoot(
     ) { pad ->
         Box(modifier = Modifier.fillMaxSize().padding(pad)) {
             BrowserRoot(
+                tabs = tabs,
                 onWebViewReady = onWebViewReady,
+                onOpenTabs = {
+                    Diagnostics.log("browser.AppRoot", "show tab switcher")
+                    showTabs = true
+                },
                 onDiagnostics = {
                     Diagnostics.log("browser.AppRoot", "show diagnostics overlay")
                     showDiagnostics = true
@@ -582,6 +612,28 @@ private fun BrowserAppRoot(
                 proxyEnabled = isEngBuild(ctx),
             )
 
+            // Tab switcher — a full-bleed overlay list of open tabs. New-tab
+            // opens a home tab; picking a tab selects it; closing the last
+            // tab returns to home (TabManager guarantees a non-empty set).
+            if (showTabs) {
+                BackHandler { showTabs = false }
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    TabSwitcherScreen(
+                        tabs = tabs,
+                        onBack = { showTabs = false },
+                        onPick = { id ->
+                            tabs.select(id)
+                            showTabs = false
+                        },
+                        onNewTab = {
+                            tabs.open()
+                            showTabs = false
+                        },
+                        onClose = { id -> tabs.close(id) },
+                    )
+                }
+            }
+
             // Intake interstitial — a full-bleed modal over whatever is
             // loaded. The single gate between an inbound Intent and a load.
             if (pendingIntake != null) {
@@ -593,8 +645,12 @@ private fun BrowserAppRoot(
                     IntakeInterstitial(
                         intake = pendingIntake,
                         onOpen = { normalizedUrl ->
-                            Diagnostics.log("browser.AppRoot", "intake open confirmed")
-                            pendingLoad = normalizedUrl
+                            // Intake links ALWAYS open in a fresh HARDENED tab,
+                            // independent of the per-app default mode: the
+                            // doorway is the untrusted-input path (design §2.3).
+                            Diagnostics.log("browser.AppRoot", "intake open confirmed (new hardened tab)")
+                            tabs.open(url = normalizedUrl, mode = BrowseMode.HARDENED)
+                            showTabs = false
                             onIntakeConsumed()
                         },
                         onCopy = { link ->
@@ -664,7 +720,9 @@ private fun BrowserAppRoot(
 
 @Composable
 private fun BrowserRoot(
+    tabs: TabManager,
     onWebViewReady: (WebView) -> Unit,
+    onOpenTabs: () -> Unit,
     onDiagnostics: () -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenJsAllowlist: () -> Unit,
@@ -677,8 +735,15 @@ private fun BrowserRoot(
     proxyEnabled: Boolean,
 ) {
     val ctx = LocalContext.current
+
+    // The active tab is the single source of truth for what the reused
+    // WebView shows. url/title/mode are read from it; a committed load or
+    // mode switch writes back to it. Referencing tabs.active in composition
+    // subscribes to activeId changes (it is state-backed).
+    val active = tabs.active
+    val activeMode = active.mode
+
     var url by remember { mutableStateOf("") }
-    var loadedUrl by remember { mutableStateOf<String?>(null) }
     // The "not a web address" chip under the URL bar (search-off honesty).
     var notAUrlHint by remember { mutableStateOf(false) }
     var jsEnabled by remember { mutableStateOf(false) }
@@ -687,20 +752,29 @@ private fun BrowserRoot(
     var wvRef by remember { mutableStateOf<WebView?>(null) }
     var canGoBackState by remember { mutableStateOf(false) }
     var canGoForwardState by remember { mutableStateOf(false) }
-    var pageTitle by remember { mutableStateOf<String?>(null) }
     var findActive by remember { mutableStateOf(false) }
     var findQuery by remember { mutableStateOf("") }
     var findCurrent by remember { mutableStateOf(-1) }
     var findTotal by remember { mutableStateOf(-1) }
+    // Progress 0..100 from onProgressChanged; drives the determinate bar and
+    // the reload-vs-stop affordance. Reset to 0 when idle so the bar hides.
+    var progress by remember { mutableStateOf(0) }
+    var showModeSheet by remember { mutableStateOf(false) }
+    // A pending Standard-mode download awaiting the user's explicit confirm.
+    var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
     // Main-frame error overlay. Non-null renders the custom dark panel over
     // the WebView; cleared on the next successful load of a new URL.
     var errorState by remember { mutableStateOf<MainFrameError?>(null) }
 
+    // loadedUrl is the active tab's committed page (null = home). Reading it
+    // through the tab keeps every derived affordance (home vs page, star,
+    // share target) correct after a tab switch.
+    val loadedUrl = active.url
+
     val bookmarkedKeys = remember(bookmarks) { bookmarks.mapTo(HashSet(bookmarks.size)) { it.url } }
 
-    // The shared load path — used by the URL bar, the interstitial's
-    // pendingLoad, retry, and reload. Resolves NotAUrl to the chip and a
-    // real URL to a WebView load.
+    // The shared load path — used by the URL bar, retry, and reload. Resolves
+    // NotAUrl to the chip and a real URL to a load in the CURRENT tab.
     val loadFromInput: (String) -> Unit = { raw ->
         when (val r = normalizeUrl(raw)) {
             is NormalizeResult.Empty -> { /* nothing to do */ }
@@ -710,29 +784,78 @@ private fun BrowserRoot(
             is NormalizeResult.Url -> {
                 notAUrlHint = false
                 errorState = null
-                jsEnabled = BrowserSettings.isJsAllowed(ctx, hostOf(r.url))
-                loadedUrl = r.url
+                jsEnabled = active.mode == BrowseMode.STANDARD ||
+                    BrowserSettings.isJsAllowed(ctx, hostOf(r.url))
+                active.url = r.url
                 url = r.url
+                // A fresh URL supersedes any stale restore bundle for this tab.
+                active.savedState = null
+                wvRef?.let { wv ->
+                    applyMode(ctx, wv, active.mode, hostOf(r.url))
+                    wv.loadUrl(r.url)
+                }
             }
         }
     }
 
-    // pendingLoad is a one-shot URL pushed in from BrowserAppRoot (from the
-    // Bookmarks overlay or the intake interstitial — both already
-    // normalized). Consume + acknowledge.
+    // pendingLoad is a one-shot URL pushed in from BrowserAppRoot (the
+    // Bookmarks overlay — already normalized). It loads into the active tab.
     LaunchedEffect(pendingLoad) {
         val target = pendingLoad ?: return@LaunchedEffect
         notAUrlHint = false
         errorState = null
-        jsEnabled = BrowserSettings.isJsAllowed(ctx, hostOf(target))
-        loadedUrl = target
+        jsEnabled = active.mode == BrowseMode.STANDARD ||
+            BrowserSettings.isJsAllowed(ctx, hostOf(target))
+        active.url = target
+        active.savedState = null
         url = target
+        wvRef?.let { wv ->
+            applyMode(ctx, wv, active.mode, hostOf(target))
+            wv.loadUrl(target)
+        }
         onPendingLoadConsumed()
     }
 
-    // Progress 0..100 from onProgressChanged; drives the determinate bar and
-    // the reload-vs-stop affordance. Reset to 0 when idle so the bar hides.
-    var progress by remember { mutableStateOf(0) }
+    // ---- Tab-switch orchestration for the single reused WebView.
+    // On every activeId change: capture the outgoing tab's live WebView
+    // state into its bundle, then restore the incoming tab (its saved bundle
+    // if any, else a fresh load of its url, else about:blank for a home tab).
+    var lastActiveId by remember { mutableStateOf(tabs.activeId) }
+    LaunchedEffect(tabs.activeId) {
+        val wv = wvRef
+        val newId = tabs.activeId
+        if (wv != null && newId != lastActiveId) {
+            tabs.tabs.firstOrNull { it.id == lastActiveId }?.let { outgoing ->
+                val b = Bundle()
+                runCatching { wv.saveState(b) }
+                outgoing.savedState = b
+            }
+            val incoming = tabs.tabs.firstOrNull { it.id == newId }
+            // Reset transient UI to the incoming tab's baseline.
+            errorState = null; notAUrlHint = false; findActive = false
+            loading = false; progress = 0
+            if (incoming != null) {
+                url = incoming.url ?: ""
+                // Re-assert the incoming tab's mode policy (cache/DOM/cookies/JS)
+                // on the shared WebView BEFORE restore/load, so a switch from a
+                // Standard tab to a Hardened tab doesn't leak the relaxed
+                // settings into the hardened page.
+                applyMode(ctx, wv, incoming.mode, hostOf(incoming.url))
+                when {
+                    incoming.savedState != null ->
+                        runCatching { wv.restoreState(incoming.savedState!!) }
+                    incoming.url != null -> wv.loadUrl(incoming.url!!)
+                    else -> wv.loadUrl("about:blank")
+                }
+                jsEnabled = incoming.mode == BrowseMode.STANDARD ||
+                    BrowserSettings.isJsAllowed(ctx, hostOf(incoming.url))
+                canGoBackState = wv.canGoBack()
+                canGoForwardState = wv.canGoForward()
+            }
+        }
+        lastActiveId = newId
+    }
+
     // Omnibox edit mode: while true the field is an editable TextField focused
     // for typing; while false it's a compact display of the current host with a
     // lock glyph. Tap-to-edit flips it on; a committed load or Cancel flips off.
@@ -742,9 +865,24 @@ private fun BrowserRoot(
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
 
-    val displayUrl = wvRef?.url ?: loadedUrl
+    val displayUrl = wvRef?.url?.takeIf { it != "about:blank" } ?: loadedUrl
     val starTarget = displayUrl
     val starOn = starTarget != null && starTarget in bookmarkedKeys
+
+    // Apply a mode switch to the active tab live: persist nothing (the per-app
+    // DEFAULT is set separately from the mode sheet), update the tab + WebView,
+    // and reload so the new policy governs the current page.
+    val switchMode: (BrowseMode) -> Unit = { newMode ->
+        if (newMode != active.mode) {
+            Diagnostics.log("browser.Root", "mode switch: ${active.mode} -> $newMode")
+            active.mode = newMode
+            wvRef?.let { wv ->
+                val allow = applyMode(ctx, wv, newMode, hostOf(wvRef?.url ?: loadedUrl))
+                jsEnabled = allow
+                if (loadedUrl != null) wv.reload()
+            }
+        }
+    }
 
     // Commit the omnibox: normalize + load, drop focus, leave edit mode. Empty
     // input just closes the editor without touching the loaded page.
@@ -759,7 +897,9 @@ private fun BrowserRoot(
     }
 
     // Real wipe (mirrors onDestroy without killing the Activity): cookies +
-    // storage globally, plus the visible page + its DOM/JS context.
+    // storage globally, plus the visible page + its DOM/JS context. Also
+    // discards every tab's saved bundle so no wiped page can be restored by a
+    // later tab switch, and resets the tab set to a single fresh home tab.
     val clearNow: () -> Unit = {
         Diagnostics.log("browser.Root", "Clear now: tap")
         runCatching {
@@ -772,7 +912,12 @@ private fun BrowserRoot(
         wvRef?.clearFormData()
         wvRef?.clearSslPreferences()
         wvRef?.loadUrl("about:blank")
-        url = ""; loadedUrl = null; jsEnabled = false; pageTitle = null
+        tabs.tabs.forEach { it.savedState = null }
+        // Reset to a single fresh home tab (keeps the ephemeral guarantee: no
+        // other tab's page survives a Clear).
+        tabs.resetToSingleHome()
+        lastActiveId = tabs.activeId
+        url = ""; jsEnabled = false
         canGoBackState = false; canGoForwardState = false
         notAUrlHint = false; errorState = null; progress = 0; editingUrl = false
         showSnack(ctx.getString(R.string.msg_cleared), null, null)
@@ -781,7 +926,7 @@ private fun BrowserRoot(
     val toggleBookmark: () -> Unit = {
         if (starTarget != null) {
             Diagnostics.log("browser.Root", "Bookmark toggle: was=${if (starOn) "ON" else "OFF"}")
-            onBookmarkToggle(starTarget, pageTitle)
+            onBookmarkToggle(starTarget, active.title)
             showSnack(
                 ctx.getString(if (starOn) R.string.msg_bookmark_removed else R.string.msg_bookmarked),
                 null, null,
@@ -859,6 +1004,22 @@ private fun BrowserRoot(
                     },
                 )
 
+                // Mode indicator — reads the active tab's mode at a glance and
+                // opens the mode chooser. Shield (dim accent) = Hardened,
+                // Public (warning tint) = Standard, so the relaxed mode is the
+                // one that visibly stands out.
+                ModeIndicatorButton(
+                    mode = activeMode,
+                    onClick = { showModeSheet = true },
+                )
+
+                // Tab-count button — opens the tab switcher; the badge shows
+                // the number of open tabs.
+                TabCountButton(
+                    count = tabs.count,
+                    onClick = onOpenTabs,
+                )
+
                 // Overflow menu.
                 Box {
                     NavIconButton(
@@ -887,16 +1048,23 @@ private fun BrowserRoot(
                             findActive = true
                         },
                         onClearNow = clearNow,
+                        modeStandard = activeMode == BrowseMode.STANDARD,
                         onToggleJs = {
-                            val host = hostOf(wvRef?.url ?: loadedUrl)
-                            if (host != null) {
-                                val nowOn = !jsEnabled
-                                jsEnabled = nowOn
-                                BrowserSettings.setJsAllowed(ctx, host, nowOn)
-                                Diagnostics.log("browser.Root",
-                                    "JS toggle: now ${if (nowOn) "ALLOW" else "OFF"} (persisted per-site)")
-                                wvRef?.settings?.javaScriptEnabled = nowOn
-                                wvRef?.reload()
+                            // The per-site JS allowlist governs HARDENED mode only.
+                            // In STANDARD, JS is on for every site by definition,
+                            // so the row is disabled (see OverflowMenu) and this
+                            // never fires. Guard anyway.
+                            if (activeMode == BrowseMode.HARDENED) {
+                                val host = hostOf(wvRef?.url ?: loadedUrl)
+                                if (host != null) {
+                                    val nowOn = !jsEnabled
+                                    jsEnabled = nowOn
+                                    BrowserSettings.setJsAllowed(ctx, host, nowOn)
+                                    Diagnostics.log("browser.Root",
+                                        "JS toggle: now ${if (nowOn) "ALLOW" else "OFF"} (persisted per-site)")
+                                    wvRef?.settings?.javaScriptEnabled = nowOn
+                                    wvRef?.reload()
+                                }
                             }
                         },
                         onToggleCookies = {
@@ -982,101 +1150,125 @@ private fun BrowserRoot(
             )
         }
 
-        // ---- Content area: WebView, or the start/home surface, or the error panel.
+        // ---- Content area. The single reused WebView is ALWAYS present (so a
+        // tab switch can save/restore its state even when a tab sits on home);
+        // BrowserHome is overlaid on top of it whenever the active tab has no
+        // committed page. The download listener + error panel layer over it.
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (loadedUrl == null) {
-                BrowserHome(
-                    bookmarks = bookmarks,
-                    onPickBookmark = { picked -> loadFromInput(picked) },
-                    onOpenBar = {
-                        editingUrl = true
-                        url = ""
-                    },
-                )
-            } else {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { factoryCtx ->
-                        buildHardenedWebView(factoryCtx).also { wv ->
-                            wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            wv.webViewClient = HardenedWebViewClient(
-                                onLoadStart = { loading = true; progress = 0 },
-                                onLoadFinish = { loading = false; progress = 0 },
-                                onNavState = { v ->
-                                    canGoBackState = v?.canGoBack() ?: false
-                                    canGoForwardState = v?.canGoForward() ?: false
-                                },
-                                jsAllowed = { host -> BrowserSettings.isJsAllowed(ctx, host) },
-                                onJsApplied = { allowed -> jsEnabled = allowed },
-                                onUrlCommitted = { committed ->
-                                    if (committed != null && committed != loadedUrl) {
-                                        loadedUrl = committed
-                                    }
-                                    // Reflect the committed URL into the omnibox
-                                    // when the user isn't mid-edit.
-                                    if (!editingUrl && committed != null) url = committed
-                                },
-                                onPageStartedForUrl = {
-                                    // A new main-frame navigation succeeded
-                                    // in starting — clear any stale error.
-                                    errorState = null
-                                },
-                                onMainFrameError = { err -> errorState = err },
-                                onBlockedScheme = { uri ->
-                                    handleBlockedScheme(ctx, uri, showSnack)
-                                },
-                            )
-                            wv.webChromeClient = HardenedWebChromeClient(
-                                onTitle = { t -> pageTitle = t },
-                                onProgress = { p -> progress = p },
-                            )
-                            wv.setDownloadListener { downloadUrl, _, _, _, _ ->
-                                Diagnostics.log("browser.Root", "download blocked (view-only)")
-                                showSnack(
-                                    ctx.getString(R.string.msg_downloads_disabled),
-                                    ctx.getString(R.string.action_download_in_chrome),
-                                ) { openInDefault(ctx, downloadUrl, showSnack) }
-                            }
-                            wv.setFindListener { active, total, isDoneCounting ->
-                                if (isDoneCounting || total > 0) {
-                                    findCurrent = active
-                                    findTotal = total
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { factoryCtx ->
+                    buildHardenedWebView(factoryCtx, active.mode).also { wv ->
+                        wv.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        wv.webViewClient = HardenedWebViewClient(
+                            ctx = ctx,
+                            onLoadStart = { loading = true; progress = 0 },
+                            onLoadFinish = { loading = false; progress = 0 },
+                            onNavState = { v ->
+                                canGoBackState = v?.canGoBack() ?: false
+                                canGoForwardState = v?.canGoForward() ?: false
+                            },
+                            currentMode = { tabs.active.mode },
+                            onJsApplied = { allowed -> jsEnabled = allowed },
+                            onUrlCommitted = { committed ->
+                                // about:blank is the home placeholder — never a
+                                // committed page; don't let it overwrite tab.url.
+                                if (committed != null && committed != "about:blank") {
+                                    if (committed != tabs.active.url) tabs.active.url = committed
+                                    if (!editingUrl) url = committed
                                 }
+                            },
+                            onPageStartedForUrl = {
+                                // A new main-frame navigation succeeded
+                                // in starting — clear any stale error.
+                                errorState = null
+                            },
+                            onMainFrameError = { err -> errorState = err },
+                            onBlockedScheme = { uri ->
+                                handleBlockedScheme(ctx, uri, showSnack)
+                            },
+                        )
+                        wv.webChromeClient = HardenedWebChromeClient(
+                            onTitle = { t -> tabs.active.title = t },
+                            onProgress = { p -> progress = p },
+                        )
+                        wv.setDownloadListener { downloadUrl, _, contentDisposition, mimeType, _ ->
+                            handleDownload(
+                                ctx = ctx,
+                                mode = tabs.active.mode,
+                                url = downloadUrl,
+                                userAgent = wv.settings.userAgentString,
+                                contentDisposition = contentDisposition,
+                                mimeType = mimeType,
+                                showSnack = showSnack,
+                                onPrompt = { pendingDownload = it },
+                            )
+                        }
+                        wv.setFindListener { active, total, isDoneCounting ->
+                            if (isDoneCounting || total > 0) {
+                                findCurrent = active
+                                findTotal = total
                             }
-                            wvRef = wv
-                            onWebViewReady(wv)
                         }
-                    },
-                    update = { wv ->
-                        wv.settings.javaScriptEnabled = jsEnabled
-                        val target = loadedUrl
-                        if (target != null && wv.url != target) {
-                            wv.loadUrl(target)
+                        wvRef = wv
+                        // If a tab already carries a url at first composition
+                        // (e.g. an intake tab opened before the WebView existed),
+                        // load it now.
+                        active.url?.let { u ->
+                            applyMode(ctx, wv, active.mode, hostOf(u))
+                            wv.loadUrl(u)
                         }
-                    },
-                )
+                        onWebViewReady(wv)
+                    }
+                },
+                update = { wv ->
+                    // Keep the live JS setting in sync with the reflected state.
+                    // Loads are driven explicitly (loadFromInput / pendingLoad /
+                    // tab-switch effect), never from update, to avoid re-load races.
+                    wv.settings.javaScriptEnabled = jsEnabled
+                },
+            )
 
-                // Custom dark error panel — overlays the WebView so the
-                // page underneath is fully covered (no Chromium grey page).
-                errorState?.let { err ->
-                    ErrorPanel(
-                        error = err,
-                        onRetry = {
-                            errorState = null
-                            wvRef?.reload()
+            // Home surface — overlaid opaquely over the (blank) WebView while
+            // the active tab has no committed page.
+            if (loadedUrl == null) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                ) {
+                    BrowserHome(
+                        mode = activeMode,
+                        onPickBookmark = { picked -> loadFromInput(picked) },
+                        onOpenBar = {
+                            editingUrl = true
+                            url = ""
                         },
-                        onOpenInDefault = {
-                            val target = wvRef?.url ?: loadedUrl ?: err.url
-                            openInDefault(ctx, target, showSnack)
-                        },
+                        onChangeMode = { showModeSheet = true },
+                        bookmarks = bookmarks,
                     )
                 }
+            }
+
+            // Custom dark error panel — overlays the WebView so the
+            // page underneath is fully covered (no Chromium grey page).
+            errorState?.let { err ->
+                ErrorPanel(
+                    error = err,
+                    onRetry = {
+                        errorState = null
+                        wvRef?.reload()
+                    },
+                    onOpenInDefault = {
+                        val target = wvRef?.url ?: loadedUrl ?: err.url
+                        openInDefault(ctx, target, showSnack)
+                    },
+                )
             }
         }
 
         // ---- Slim bottom browser bar: back / forward / reload / bookmark.
         // Present once a page is loaded so the app reads as a browser even
-        // one-handed. (Single-view quarantine viewer: no tabs, by design.)
+        // one-handed. (Tabs live in the top toolbar's tab-count button.)
         if (loadedUrl != null) {
             Surface(
                 color = MaterialTheme.colorScheme.surface,
@@ -1124,6 +1316,38 @@ private fun BrowserRoot(
         if (proxyEnabled) {
             SuiteStatusFooter(modifier = Modifier.padding(UnderstoryTheme.spacing.sm))
         }
+    }
+
+    // ---- Mode chooser (dialog overlay). Honest about what each mode does;
+    // lets the user also set the per-app default for future user-opened tabs.
+    if (showModeSheet) {
+        ModeChooserDialog(
+            current = activeMode,
+            isDefault = BrowserSettings.getDefaultMode(ctx) == activeMode,
+            onPick = { mode ->
+                switchMode(mode)
+                showModeSheet = false
+            },
+            onSetDefault = { mode ->
+                BrowserSettings.setDefaultMode(ctx, mode)
+                tabs.newTabMode = mode
+                Diagnostics.log("browser.Root", "default mode set: $mode")
+            },
+            onDismiss = { showModeSheet = false },
+        )
+    }
+
+    // ---- Standard-mode download confirm. Hardened never reaches this: its
+    // download listener hands off to the default browser with a snackbar.
+    pendingDownload?.let { dl ->
+        DownloadConfirmDialog(
+            download = dl,
+            onConfirm = {
+                startSystemDownload(ctx, dl, showSnack)
+                pendingDownload = null
+            },
+            onDismiss = { pendingDownload = null },
+        )
     }
 }
 
@@ -1262,6 +1486,7 @@ private fun OverflowMenu(
     onOpenInDefault: () -> Unit,
     onFind: () -> Unit,
     onClearNow: () -> Unit,
+    modeStandard: Boolean,
     onToggleJs: () -> Unit,
     onToggleCookies: () -> Unit,
     onManageJs: () -> Unit,
@@ -1280,10 +1505,17 @@ private fun OverflowMenu(
             onDismiss(); onFind()
         }
         HorizontalDivider()
+        // The per-site JS allowlist governs HARDENED mode. In STANDARD mode JS
+        // is on for every site by definition, so the row reports that and is
+        // disabled (it isn't a per-site choice there).
         MenuRow(
             Icons.Filled.Code,
-            if (jsEnabled) stringResource(R.string.menu_js_on) else stringResource(R.string.menu_js_off),
-            enabled = hasPage,
+            when {
+                modeStandard -> stringResource(R.string.menu_js_standard)
+                jsEnabled -> stringResource(R.string.menu_js_on)
+                else -> stringResource(R.string.menu_js_off)
+            },
+            enabled = hasPage && !modeStandard,
         ) { onDismiss(); onToggleJs() }
         MenuRow(
             Icons.Filled.Cookie,
@@ -1411,9 +1643,11 @@ private fun FindInPageBar(
  */
 @Composable
 private fun BrowserHome(
+    mode: BrowseMode,
     bookmarks: List<Bookmark>,
     onPickBookmark: (String) -> Unit,
     onOpenBar: () -> Unit,
+    onChangeMode: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -1443,6 +1677,12 @@ private fun BrowserHome(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+
+        // The active tab's mode as a tappable chip — opens the mode chooser so
+        // the choice (and what it means) is one tap from the home surface.
+        Spacer(Modifier.height(UnderstoryTheme.spacing.md))
+        ModeChip(mode = mode, onClick = onChangeMode)
+
         Spacer(Modifier.height(UnderstoryTheme.spacing.lg))
         Button(
             onClick = onOpenBar,
@@ -1453,17 +1693,24 @@ private fun BrowserHome(
             Text(stringResource(R.string.home_hint))
         }
 
+        // The policy cards read the ACTIVE mode so the home surface never
+        // over-claims: in Standard the copy honestly says JS is on and
+        // first-party cookies/history persist within the app.
         Spacer(Modifier.height(UnderstoryTheme.spacing.lg))
         HomeInfoCard(
             icon = Icons.Filled.Code,
-            title = stringResource(R.string.home_card_js_title),
-            body = stringResource(R.string.home_card_js_body),
+            title = if (mode == BrowseMode.HARDENED) stringResource(R.string.home_card_js_title)
+            else stringResource(R.string.home_card_js_title_std),
+            body = if (mode == BrowseMode.HARDENED) stringResource(R.string.home_card_js_body)
+            else stringResource(R.string.home_card_js_body_std),
         )
         Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
         HomeInfoCard(
             icon = Icons.Filled.DeleteSweep,
-            title = stringResource(R.string.home_card_ephemeral_title),
-            body = stringResource(R.string.home_card_ephemeral_body),
+            title = if (mode == BrowseMode.HARDENED) stringResource(R.string.home_card_ephemeral_title)
+            else stringResource(R.string.home_card_session_title_std),
+            body = if (mode == BrowseMode.HARDENED) stringResource(R.string.home_card_ephemeral_body)
+            else stringResource(R.string.home_card_session_body_std),
         )
         Spacer(Modifier.height(UnderstoryTheme.spacing.sm))
         HomeInfoCard(
@@ -2020,6 +2267,518 @@ private fun JsAllowlistScreen(onBack: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
+// Tabs + mode UI (P1)
+// ---------------------------------------------------------------------------
+
+/** The label ("Hardened" / "Standard") for a mode. */
+@Composable
+private fun modeLabel(mode: BrowseMode): String = when (mode) {
+    BrowseMode.HARDENED -> stringResource(R.string.mode_hardened)
+    BrowseMode.STANDARD -> stringResource(R.string.mode_standard)
+}
+
+/**
+ * Toolbar mode indicator: Shield (dim, on-surface-variant) for Hardened,
+ * Public (warning-tinted) for Standard, so the relaxed mode is the one that
+ * visibly stands out. Tapping opens the mode chooser.
+ */
+@Composable
+private fun ModeIndicatorButton(mode: BrowseMode, onClick: () -> Unit) {
+    val hardened = mode == BrowseMode.HARDENED
+    NavIconButton(
+        icon = if (hardened) Icons.Filled.Shield else Icons.Filled.Public,
+        contentDescription = stringResource(R.string.cd_mode_indicator, modeLabel(mode)),
+        enabled = true,
+        tint = if (hardened) MaterialTheme.colorScheme.onSurfaceVariant
+        else UnderstoryTheme.semantic.warning,
+        onClick = onClick,
+    )
+}
+
+/**
+ * A mode pill for the home surface: a tinted rounded chip that reads
+ * "Hardened mode" / "Standard mode" and opens the chooser on tap. Hardened
+ * uses the success container (safe), Standard the warning container (relaxed).
+ */
+@Composable
+private fun ModeChip(mode: BrowseMode, onClick: () -> Unit) {
+    val hardened = mode == BrowseMode.HARDENED
+    val container = if (hardened) UnderstoryTheme.semantic.successContainer
+    else UnderstoryTheme.semantic.warningContainer
+    val fg = if (hardened) UnderstoryTheme.semantic.success else UnderstoryTheme.semantic.warning
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(container, RoundedCornerShape(50))
+            .clickable { onClick() }
+            .semantics { role = androidx.compose.ui.semantics.Role.Button }
+            .defaultMinSize(minHeight = 40.dp)
+            .padding(horizontal = UnderstoryTheme.spacing.md, vertical = UnderstoryTheme.spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.xs),
+    ) {
+        Icon(
+            imageVector = if (hardened) Icons.Filled.Shield else Icons.Filled.Public,
+            contentDescription = null,
+            tint = fg,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            stringResource(R.string.mode_chip, modeLabel(mode)),
+            style = MaterialTheme.typography.labelLarge,
+            color = fg,
+        )
+    }
+}
+
+/**
+ * Tab-count toolbar button: a bordered rounded square carrying the number of
+ * open tabs (capped display at "9+"). Opens the tab switcher.
+ */
+@Composable
+private fun TabCountButton(count: Int, onClick: () -> Unit) {
+    val desc = stringResource(R.string.cd_tab_count, count)
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(48.dp).semantics {
+            contentDescription = desc
+        },
+    ) {
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .border(
+                    width = 2.dp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    shape = RoundedCornerShape(6.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (count > 9) "9+" else count.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * The tab switcher — a full-screen list of open tabs (title + host + close)
+ * plus a "New tab" action. New-tab opens a fresh BrowserHome tab; picking a
+ * tab selects it; the last tab can't be emptied (TabManager reseeds home).
+ */
+@Composable
+private fun TabSwitcherScreen(
+    tabs: TabManager,
+    onBack: () -> Unit,
+    onPick: (Long) -> Unit,
+    onNewTab: () -> Unit,
+    onClose: (Long) -> Unit,
+) {
+    val activeId = tabs.activeId
+    SuiteScaffold(
+        title = stringResource(R.string.tabs_title, tabs.count),
+        onBack = onBack,
+        showSuiteFooter = false,
+        actions = {
+            IconButton(onClick = onNewTab) {
+                Icon(
+                    Icons.Filled.Add,
+                    contentDescription = stringResource(R.string.cd_new_tab),
+                )
+            }
+        },
+    ) { pad ->
+        androidx.compose.foundation.lazy.LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(pad),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(UnderstoryTheme.spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.sm),
+        ) {
+            items(items = tabs.tabs.toList(), key = { it.id }) { tab ->
+                TabRow(
+                    tab = tab,
+                    isActive = tab.id == activeId,
+                    onTap = { onPick(tab.id) },
+                    onClose = { onClose(tab.id) },
+                )
+            }
+            item(key = "__new_tab__") {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.medium,
+                    tonalElevation = 1.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.medium)
+                        .clickable { onNewTab() }
+                        .semantics { role = androidx.compose.ui.semantics.Role.Button },
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 56.dp)
+                            .padding(UnderstoryTheme.spacing.lg),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            stringResource(R.string.tabs_new),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One row in the tab switcher: mode glyph · title/host · close. */
+@Composable
+private fun TabRow(
+    tab: Tab,
+    isActive: Boolean,
+    onTap: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val hardened = tab.mode == BrowseMode.HARDENED
+    val title = tab.title?.takeIf { it.isNotBlank() }
+        ?: tab.host
+        ?: stringResource(R.string.tabs_home_label)
+    val sub = tab.host ?: stringResource(R.string.tabs_home_sub)
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = if (isActive) 3.dp else 1.dp,
+        border = if (isActive) androidx.compose.foundation.BorderStroke(
+            2.dp, MaterialTheme.colorScheme.primary,
+        ) else null,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.medium)
+                .clickable { onTap() }
+                .semantics(mergeDescendants = true) {
+                    role = androidx.compose.ui.semantics.Role.Button
+                }
+                .defaultMinSize(minHeight = 56.dp)
+                .padding(start = UnderstoryTheme.spacing.lg),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.md),
+        ) {
+            Icon(
+                imageVector = if (hardened) Icons.Filled.Shield else Icons.Filled.Public,
+                contentDescription = null,
+                tint = if (hardened) MaterialTheme.colorScheme.onSurfaceVariant
+                else UnderstoryTheme.semantic.warning,
+                modifier = Modifier.size(20.dp),
+            )
+            Column(Modifier.weight(1f).padding(vertical = UnderstoryTheme.spacing.sm)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    sub,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = onClose, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.cd_close_tab, title),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The mode chooser dialog. Honest, side-by-side copy on what each mode does;
+ * picking a mode applies it to the current tab. A checkbox row lets the user
+ * also make the chosen mode the default for future user-opened tabs.
+ */
+@Composable
+private fun ModeChooserDialog(
+    current: BrowseMode,
+    isDefault: Boolean,
+    onPick: (BrowseMode) -> Unit,
+    onSetDefault: (BrowseMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selected by remember { mutableStateOf(current) }
+    var makeDefault by remember { mutableStateOf(isDefault) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.mode_dialog_title), style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.sm)) {
+                ModeOptionRow(
+                    selected = selected == BrowseMode.HARDENED,
+                    title = stringResource(R.string.mode_hardened),
+                    body = stringResource(R.string.mode_hardened_body),
+                    onSelect = { selected = BrowseMode.HARDENED },
+                )
+                ModeOptionRow(
+                    selected = selected == BrowseMode.STANDARD,
+                    title = stringResource(R.string.mode_standard),
+                    body = stringResource(R.string.mode_standard_body),
+                    onSelect = { selected = BrowseMode.STANDARD },
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .clickable { makeDefault = !makeDefault }
+                        .semantics {
+                            role = androidx.compose.ui.semantics.Role.Checkbox
+                        }
+                        .padding(vertical = UnderstoryTheme.spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.sm),
+                ) {
+                    androidx.compose.material3.Checkbox(
+                        checked = makeDefault,
+                        onCheckedChange = null,
+                        modifier = Modifier.clearAndSetSemantics {},
+                    )
+                    Text(
+                        stringResource(R.string.mode_make_default),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                if (makeDefault) onSetDefault(selected)
+                onPick(selected)
+            }) { Text(stringResource(R.string.action_apply)) }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+@Composable
+private fun ModeOptionRow(
+    selected: Boolean,
+    title: String,
+    body: String,
+    onSelect: () -> Unit,
+) {
+    Surface(
+        color = if (selected) MaterialTheme.colorScheme.surfaceVariant
+        else MaterialTheme.colorScheme.surface,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = if (selected) 2.dp else 0.dp,
+        border = if (selected) androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.primary,
+        ) else androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.medium)
+                .selectable(
+                    selected = selected,
+                    role = androidx.compose.ui.semantics.Role.RadioButton,
+                    onClick = onSelect,
+                )
+                .padding(UnderstoryTheme.spacing.md),
+            horizontalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.sm),
+        ) {
+            androidx.compose.material3.RadioButton(
+                selected = selected,
+                onClick = null,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(UnderstoryTheme.spacing.xs))
+                Text(
+                    body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Standard-mode download confirm. Names the file + host so the user knows
+ * exactly what they're about to save and from where. Confirm routes to the
+ * system DownloadManager.
+ */
+@Composable
+private fun DownloadConfirmDialog(
+    download: PendingDownload,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.download_title), style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(UnderstoryTheme.spacing.xs)) {
+                Text(
+                    download.fileName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(R.string.download_from, download.host ?: download.url),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(R.string.download_dest),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.action_download))
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
+}
+
+/** A download awaiting the Standard-mode confirm prompt. */
+data class PendingDownload(
+    val url: String,
+    val userAgent: String?,
+    val contentDisposition: String?,
+    val mimeType: String?,
+    val fileName: String,
+    val host: String?,
+)
+
+/**
+ * WebView download hook. In HARDENED mode downloads are refused and offered
+ * to the default browser (the pre-P1 behavior, unchanged). In STANDARD mode
+ * a confirm prompt is surfaced; only an explicit confirm reaches
+ * [startSystemDownload].
+ */
+private fun handleDownload(
+    ctx: Context,
+    mode: BrowseMode,
+    url: String,
+    userAgent: String?,
+    contentDisposition: String?,
+    mimeType: String?,
+    showSnack: (String, String?, (() -> Unit)?) -> Unit,
+    onPrompt: (PendingDownload) -> Unit,
+) {
+    if (mode == BrowseMode.HARDENED) {
+        Diagnostics.log("browser.download", "download refused (hardened) — offer to default browser")
+        showSnack(
+            ctx.getString(R.string.msg_downloads_disabled),
+            ctx.getString(R.string.action_download_in_chrome),
+        ) { openInDefault(ctx, url, showSnack) }
+        return
+    }
+    // STANDARD: only https downloads (the transport block already refuses
+    // cleartext, but be explicit — never hand a non-https URL to DownloadManager).
+    if (!url.startsWith("https://", ignoreCase = true)) {
+        Diagnostics.log("browser.download", "refused non-https download")
+        showSnack(ctx.getString(R.string.msg_download_insecure), null, null)
+        return
+    }
+    val fileName = runCatching {
+        android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
+    }.getOrDefault("download")
+    Diagnostics.log("browser.download", "standard download prompt")
+    onPrompt(
+        PendingDownload(
+            url = url,
+            userAgent = userAgent,
+            contentDisposition = contentDisposition,
+            mimeType = mimeType,
+            fileName = fileName,
+            host = hostOf(url),
+        ),
+    )
+}
+
+/**
+ * Enqueue a confirmed Standard-mode download via the system DownloadManager
+ * into the app-scoped external Downloads dir (no storage permission needed on
+ * minSdk 33). Cookies for the request are pulled from the CookieManager so a
+ * gated file downloads correctly in Standard mode.
+ */
+private fun startSystemDownload(
+    ctx: Context,
+    dl: PendingDownload,
+    showSnack: (String, String?, (() -> Unit)?) -> Unit,
+) {
+    val ok = runCatching {
+        val req = android.app.DownloadManager.Request(Uri.parse(dl.url)).apply {
+            setMimeType(dl.mimeType)
+            dl.userAgent?.let { addRequestHeader("User-Agent", it) }
+            runCatching {
+                CookieManager.getInstance().getCookie(dl.url)?.let { c ->
+                    addRequestHeader("Cookie", c)
+                }
+            }
+            setTitle(dl.fileName)
+            setNotificationVisibility(
+                android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED,
+            )
+            setDestinationInExternalFilesDir(
+                ctx, android.os.Environment.DIRECTORY_DOWNLOADS, dl.fileName,
+            )
+        }
+        val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+        dm.enqueue(req)
+    }.isSuccess
+    showSnack(
+        ctx.getString(if (ok) R.string.msg_download_started else R.string.msg_download_failed),
+        null, null,
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Load-path helpers
 // ---------------------------------------------------------------------------
 
@@ -2149,8 +2908,16 @@ private fun handleBlockedScheme(
     }
 }
 
+/**
+ * Build the one reused WebView with the invariant hardening that holds in
+ * BOTH modes, then layer the mode-specific relaxations via [applyMode]. The
+ * invariants here are never reachable by a mode toggle: file/content access
+ * off, mixed content never allowed, no autofill/saved passwords, geolocation
+ * off, no auto-window-open, no multiple windows, third-party cookies blocked,
+ * Safe Browsing on.
+ */
 @SuppressLint("SetJavaScriptEnabled")
-private fun buildHardenedWebView(ctx: android.content.Context): WebView {
+private fun buildHardenedWebView(ctx: android.content.Context, mode: BrowseMode): WebView {
     val wv = WebView(ctx)
     val s: WebSettings = wv.settings
     s.javaScriptEnabled = false
@@ -2168,13 +2935,9 @@ private fun buildHardenedWebView(ctx: android.content.Context): WebView {
     s.mediaPlaybackRequiresUserGesture = true
     s.javaScriptCanOpenWindowsAutomatically = false
     s.setSupportMultipleWindows(false)
-    s.cacheMode = WebSettings.LOAD_NO_CACHE
-    s.databaseEnabled = false
-    s.domStorageEnabled = false
 
     runCatching {
         val cm = CookieManager.getInstance()
-        cm.setAcceptCookie(BrowserSettings.getFirstPartyCookies(ctx))
         cm.setAcceptThirdPartyCookies(wv, false)
     }
 
@@ -2183,14 +2946,63 @@ private fun buildHardenedWebView(ctx: android.content.Context): WebView {
             WebSettingsCompat.setSafeBrowsingEnabled(s, true)
         }
     }
+
+    applyMode(ctx, wv, mode, host = null)
     return wv
 }
 
+/**
+ * Apply the mode-dependent settings to the (already-invariant-hardened)
+ * WebView. Called on build, on an explicit mode switch, and on every
+ * main-frame navigation (so per-host JS and cache/storage track the active
+ * tab's mode + the site being shown).
+ *
+ * HARDENED: cache off, DOM storage off, first-party cookies per the global
+ *   toggle, JS on ONLY when [host] is on the per-site allowlist.
+ * STANDARD: normal cache + DOM storage, first-party cookies accepted, JS on.
+ *
+ * @return the effective javaScriptEnabled value applied, so the caller can
+ *   reflect the JS indicator honestly.
+ */
+private fun applyMode(
+    ctx: android.content.Context,
+    wv: WebView,
+    mode: BrowseMode,
+    host: String?,
+): Boolean {
+    val s = wv.settings
+    val jsOn: Boolean
+    when (mode) {
+        BrowseMode.HARDENED -> {
+            s.cacheMode = WebSettings.LOAD_NO_CACHE
+            s.databaseEnabled = false
+            s.domStorageEnabled = false
+            jsOn = BrowserSettings.isJsAllowed(ctx, host)
+            runCatching {
+                CookieManager.getInstance()
+                    .setAcceptCookie(BrowserSettings.getFirstPartyCookies(ctx))
+            }
+        }
+        BrowseMode.STANDARD -> {
+            s.cacheMode = WebSettings.LOAD_DEFAULT
+            s.databaseEnabled = true
+            s.domStorageEnabled = true
+            jsOn = true
+            runCatching { CookieManager.getInstance().setAcceptCookie(true) }
+        }
+    }
+    s.javaScriptEnabled = jsOn
+    return jsOn
+}
+
 private class HardenedWebViewClient(
+    val ctx: Context,
     val onLoadStart: (WebView?) -> Unit,
     val onLoadFinish: (WebView?) -> Unit,
     val onNavState: (WebView?) -> Unit,
-    val jsAllowed: (String?) -> Boolean,
+    // The active tab's current mode, read fresh on each navigation so a
+    // mid-session mode switch takes effect on the next load.
+    val currentMode: () -> BrowseMode,
     val onJsApplied: (Boolean) -> Unit,
     val onUrlCommitted: (String?) -> Unit,
     val onPageStartedForUrl: (String?) -> Unit,
@@ -2206,12 +3018,13 @@ private class HardenedWebViewClient(
             // content:// (and intent:, javascript:, etc.) unreachable. The
             // hardening is unchanged; we only add feedback + an opt-out
             // hand-off for mailto/tel/sms instead of the old silent swallow.
+            // Applies in BOTH modes: Standard relaxes JS/cookies/downloads,
+            // never the scheme allowlist or the cleartext block.
             if (req.isForMainFrame) onBlockedScheme(uri)
             return true
         }
-        if (req.isForMainFrame) {
-            val allow = jsAllowed(uri.host?.lowercase())
-            view?.settings?.javaScriptEnabled = allow
+        if (req.isForMainFrame && view != null) {
+            val allow = applyMode(ctx, view, currentMode(), uri.host?.lowercase())
             onJsApplied(allow)
         }
         return false
@@ -2258,10 +3071,9 @@ private class HardenedWebViewClient(
         super.doUpdateVisitedHistory(view, url, isReload)
         onNavState(view)
         onUrlCommitted(url)
-        val allow = jsAllowed(hostOf(url))
-        if (view?.settings?.javaScriptEnabled != allow) {
-            view?.settings?.javaScriptEnabled = allow
-            onJsApplied(allow)
+        if (view != null) {
+            val allow = applyMode(ctx, view, currentMode(), hostOf(url))
+            if (view.settings.javaScriptEnabled != allow) onJsApplied(allow)
         }
     }
 

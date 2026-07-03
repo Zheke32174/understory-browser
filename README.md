@@ -1,6 +1,11 @@
 # understory-browser — "Understory Safe View"
 
-The suite's **quarantine viewer**: the place you open a link you do NOT trust — an SMS-phish, a strange email, a QR code, a stranger's chat — one share-sheet tap from Chrome/Brave. Chrome keeps the default-browser role, the logins, the tabs; Safe View offers what Chrome structurally cannot: JavaScript dead by default, no cookies, no storage, no downloads, no popups, no permission prompts, ephemeral by construction, and a permission-stripped APK. v1 is a view-only, one-link-at-a-time inspector (no tabs, no persistent sessions — honestly deferred).
+The suite's **quarantine viewer**: the place you open a link you do NOT trust — an SMS-phish, a strange email, a QR code, a stranger's chat — one share-sheet tap from Chrome/Brave. Chrome keeps the default-browser role, the logins, the tabs; Safe View offers what Chrome structurally cannot: in its **Hardened** mode, JavaScript dead by default, no cookies, no storage, no downloads, no popups, no permission prompts, ephemeral by construction, and a permission-stripped APK.
+
+Two things the user controls, added in P1:
+
+- **Tabs.** A real multi-tab model (a single reused WebView driven by per-tab saved-state bundles). The tab-count button in the toolbar opens a switcher; closing the last tab returns to home. Config-change-durable; still ephemeral on exit.
+- **Mode — not an infinity lockdown tomb.** A per-app-default + per-tab toggle between **Hardened** (the quarantine defaults above) and **Standard** (JavaScript on, first-party cookies + history kept within the app, downloads allowed behind a prompt) — for when you just want to browse. **Both** modes keep the non-negotiable posture: `FLAG_SECURE`/no-screenshot, mixed-content blocked, cleartext denied, SSL errors hard-rejected, third-party cookies blocked, Safe Browsing on, and a full wipe on *Clear now* / app exit. A link opened through the intake doorway is **always** Hardened; Standard is opt-in for normal browsing.
 
 The package id stays `com.understory.browser`; the store-facing display name is **Safe View**.
 

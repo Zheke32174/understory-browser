@@ -40,6 +40,7 @@
     <string name="menu_clear">Clear now</string>
     <string name="menu_js_on">JavaScript: on for this site</string>
     <string name="menu_js_off">JavaScript: off (default)</string>
+    <string name="menu_js_standard">JavaScript: on (Standard mode)</string>
     <string name="menu_cookies_on">Cookies: first-party</string>
     <string name="menu_cookies_off">Cookies: off</string>
     <string name="menu_manage_js">Allowed JavaScript sites</string>
@@ -84,6 +85,35 @@
     <string name="chooser_open_in_browser">Open in browser</string>
     <string name="msg_not_a_web_address">That doesn\'t look like a web address. Safe View doesn\'t search the web — paste a full link.</string>
 
+    <!-- Tabs -->
+    <string name="tabs_title">Tabs (%1$d)</string>
+    <string name="tabs_new">New tab</string>
+    <string name="cd_new_tab">New tab</string>
+    <string name="cd_close_tab">Close tab %1$s</string>
+    <string name="cd_tab_count">%1$d open tabs. Opens the tab switcher.</string>
+    <string name="tabs_home_label">New tab</string>
+    <string name="tabs_home_sub">Home — no page loaded</string>
+
+    <!-- Browsing mode -->
+    <string name="mode_hardened">Hardened</string>
+    <string name="mode_standard">Standard</string>
+    <string name="mode_chip">%1$s mode</string>
+    <string name="cd_mode_indicator">Browsing mode: %1$s. Tap to change.</string>
+    <string name="mode_dialog_title">Browsing mode for this tab</string>
+    <string name="mode_hardened_body">Quarantine viewer. JavaScript off unless you allow a site, no cookies kept, no downloads, no cache or storage, and the page is wiped when you leave. Best for opening a link you don\'t trust.</string>
+    <string name="mode_standard_body">Ordinary browsing. JavaScript on, first-party cookies and history kept within the app, downloads allowed with a prompt. Mixed content is still blocked, Safe Browsing stays on, and screenshots stay off. Everything is still wiped on Clear now and when the app closes.</string>
+    <string name="mode_make_default">Use this as the default for new tabs</string>
+    <string name="action_apply">Apply</string>
+
+    <!-- Downloads (Standard mode) -->
+    <string name="download_title">Download this file?</string>
+    <string name="download_from">From %1$s</string>
+    <string name="download_dest">Saves to this app\'s Downloads folder.</string>
+    <string name="action_download">Download</string>
+    <string name="msg_download_insecure">Won\'t download over an insecure (http) link.</string>
+    <string name="msg_download_started">Download started.</string>
+    <string name="msg_download_failed">Couldn\'t start the download.</string>
+
     <!-- Home / start surface (shown before any page is loaded) -->
     <string name="home_title">Hardened viewer</string>
     <string name="home_tagline">A quarantined, single-page web viewer — not a search engine.</string>
@@ -92,13 +122,17 @@
     <string name="home_card_js_body">Every site loads with scripting disabled. Turn it on per-site from the menu; the choice is remembered in an allowlist.</string>
     <string name="home_card_ephemeral_title">Nothing is kept</string>
     <string name="home_card_ephemeral_body">Cookies, storage, and history are wiped when you close the viewer or tap Clear now. Third-party cookies are always blocked.</string>
+    <string name="home_card_js_title_std">JavaScript is on</string>
+    <string name="home_card_js_body_std">This tab is in Standard mode, so scripts run like an ordinary browser. Switch this tab to Hardened from the mode button for a quarantined view with scripting off.</string>
+    <string name="home_card_session_title_std">Session kept in the app</string>
+    <string name="home_card_session_body_std">First-party cookies and history are kept while the app is open so sign-ins work. Third-party cookies are still blocked, and everything is wiped on Clear now and when the app closes.</string>
     <string name="home_card_capture_title">Capture is blocked</string>
     <string name="home_card_capture_body">Screenshots are disabled here. To capture a suspicious page, open it in your default browser from the menu.</string>
     <string name="home_bookmarks_header">Bookmarks</string>
 
     <!-- Intake interstitial -->
     <string name="intake_heading">Open this link in the hardened viewer?</string>
-    <string name="intake_sub">JavaScript will be OFF. No cookies, no downloads, no location, camera, or mic. The link opens here, not in your normal browser.</string>
+    <string name="intake_sub">This link opens in Hardened mode: JavaScript OFF, no cookies, no downloads, no location, camera, or mic, and the page is wiped when you leave. It opens here, not in your normal browser. You can switch this tab to Standard mode afterward from the mode button.</string>
     <string name="intake_source_from">Shared from: %1$s</string>
     <string name="intake_source_unknown">Opened by another app</string>
     <string name="intake_no_link">No link found in the shared text — paste a full link above.</string>
