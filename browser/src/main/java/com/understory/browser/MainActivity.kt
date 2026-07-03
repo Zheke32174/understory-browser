@@ -1222,12 +1222,10 @@ private fun JsToggleButton(
 
 /** Draw a 1dp outline border matching the OutlinedButton look. */
 private fun Modifier.androidxOutline(color: Color, enabled: Boolean): Modifier =
-    this.then(
-        androidx.compose.foundation.border(
-            width = 1.dp,
-            color = if (enabled) color else color.copy(alpha = 0.4f),
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
-        ),
+    this.border(
+        width = 1.dp,
+        color = if (enabled) color else color.copy(alpha = 0.4f),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
     )
 
 /**
