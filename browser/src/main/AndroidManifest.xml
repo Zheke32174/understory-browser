@@ -180,12 +180,51 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!--
+              Share-target intake (D1, path A). Fires only from the system
+              share sheet — an explicit user gesture inside another app.
+              This is the strictly-safe additive channel and ships enabled
+              by default. Every inbound URL still lands on the mandatory
+              IntakeInterstitial before any load (see MainActivity).
+            -->
+            <intent-filter android:label="@string/alias_open_label">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
 
-        <!-- Suite capability beacon. -->
+        <!--
+          VIEW http/https intake (D1, path B). Disabled by default so the
+          default install's exported surface stays SEND-only. The first-run
+          opt-in flips it on via PackageManager.setComponentEnabledSetting.
+          Even when enabled it is NON-default (autoVerify=false, user picks
+          from the disambiguation chooser every time — the app never claims
+          the browser role), and every delivered URL is gated by the
+          IntakeInterstitial, so a programmatic startActivity can at most
+          show the user a URL they can cancel.
+        -->
+        <activity-alias
+            android:name=".ViewIntakeAlias"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:label="@string/alias_open_label">
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Suite capability beacon. Authority tracks the applicationId
+             placeholder so the eng flavor (…​.eng.suitecaps) can install
+             beside prod (…​.suitecaps) without a duplicate-authority reject. -->
         <provider
             android:name=".SuiteCapsProvider"
-            android:authorities="com.understory.browser.suitecaps"
+            android:authorities="${applicationId}.suitecaps"
             android:exported="true"
             android:readPermission="com.understory.suite.CAPS"
             android:writePermission="com.understory.suite.CAPS_WRITE"

@@ -19,6 +19,9 @@ object BrowserSettings {
     private const val K_I2P_PROVIDER = "i2p_provider"
     private const val K_JS_ALLOWLIST = "js_allowlist_v1"
     private const val K_FIRST_PARTY_COOKIES = "first_party_cookies"
+    private const val K_VIEW_FILTER_ENABLED = "view_filter_enabled"
+    private const val K_FIRST_RUN_DONE = "first_run_done"
+    private const val K_EXTERNAL_HANDOFF = "external_handoff"
 
     /**
      * Per-site JavaScript allowlist, keyed by lowercase host. JS is OFF
@@ -53,6 +56,71 @@ object BrowserSettings {
             for (i in 0 until arr.length()) out += arr.getString(i)
             out
         }.getOrDefault(emptySet())
+    }
+
+    /**
+     * The JS allowlist as a stable, alphabetically-sorted list — the shape
+     * the JS-allowlist management screen renders. Sorting keeps the list
+     * order deterministic across launches (the backing set is unordered).
+     */
+    fun getJsHosts(ctx: Context): List<String> =
+        getJsAllowlist(ctx).sorted()
+
+    /**
+     * Revoke JS for a single host. Convenience over [setJsAllowed] for the
+     * allowlist-management screen's per-row remove control.
+     */
+    fun removeJsHost(ctx: Context, host: String) {
+        setJsAllowed(ctx, host, false)
+    }
+
+    /**
+     * Whether the opt-in ACTION_VIEW http/https alias (`.ViewIntakeAlias`)
+     * is enabled. Default OFF — the strictly-safe default install exports
+     * only the SEND share target. Flipping this true is a one-time user
+     * choice in the first-run card; the caller pairs it with a
+     * PackageManager.setComponentEnabledSetting on the alias so the
+     * manifest state and this pref stay in sync.
+     */
+    fun getViewFilterEnabled(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getBoolean(K_VIEW_FILTER_ENABLED, false)
+
+    fun setViewFilterEnabled(ctx: Context, on: Boolean) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putBoolean(K_VIEW_FILTER_ENABLED, on)
+            .apply()
+    }
+
+    /**
+     * Whether the first-run VIEW-filter opt-in card has been shown and
+     * answered. Once true the card never shows again regardless of the
+     * choice made.
+     */
+    fun isFirstRunDone(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getBoolean(K_FIRST_RUN_DONE, false)
+
+    fun setFirstRunDone(ctx: Context) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putBoolean(K_FIRST_RUN_DONE, true)
+            .apply()
+    }
+
+    /**
+     * Whether `mailto:` / `tel:` / `sms:` links hand off to the user's real
+     * apps via an implicit ACTION_VIEW intent. Default ON (the complement
+     * hand-off). Users who want zero outbound intents can turn it off, in
+     * which case those schemes take the "refuse with feedback" branch.
+     */
+    fun getExternalHandoffEnabled(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .getBoolean(K_EXTERNAL_HANDOFF, true)
+
+    fun setExternalHandoffEnabled(ctx: Context, on: Boolean) {
+        ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+            .putBoolean(K_EXTERNAL_HANDOFF, on)
+            .apply()
     }
 
     /**

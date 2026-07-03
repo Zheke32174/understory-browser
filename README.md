@@ -1,8 +1,15 @@
-# understory-browser
+# understory-browser — "Understory Safe View"
 
-Hardened minimal browser with overlay-network proxy support (i2p / lokinet / yggdrasil). Highest-ACE-surface app of the suite; ships only with the hardened WebView config.
+The suite's **quarantine viewer**: the place you open a link you do NOT trust — an SMS-phish, a strange email, a QR code, a stranger's chat — one share-sheet tap from Chrome/Brave. Chrome keeps the default-browser role, the logins, the tabs; Safe View offers what Chrome structurally cannot: JavaScript dead by default, no cookies, no storage, no downloads, no popups, no permission prompts, ephemeral by construction, and a permission-stripped APK. v1 is a view-only, one-link-at-a-time inspector (no tabs, no persistent sessions — honestly deferred).
+
+The package id stays `com.understory.browser`; the store-facing display name is **Safe View**.
 
 Status: **alpha** (functional; working the release-blockers list in understory-common).
+
+## The doorway and the exit
+
+- **Doorway (intake):** a `text/plain` share target ("Share → Open in Safe View", always on) plus an opt-in `http/https` VIEW filter (first-run choice; never becomes your default browser). Both funnel through **one mandatory confirmation interstitial** that shows the full normalized URL (host emphasized so a look-alike domain is legible) with JavaScript already OFF — a drive-by `startActivity` can put a URL on that screen but cannot load it.
+- **Exit (hand-off):** once you trust the page, **Open in default browser** hands the canonical URL back to Chrome/Brave via a chooser (Safe View claims no browser role). The same hand-off backs blocked downloads ("Download in Chrome") and `mailto:`/`tel:`/`sms:` links (opt-out in settings).
 
 ## Hardened WebView config (defense-matrix reference)
 
@@ -17,10 +24,13 @@ Implements the RELEASE_BLOCKERS.md "Browser" hardening items. Canonical per-item
 | Safe Browsing enabled | `WebSettingsCompat.setSafeBrowsingEnabled(true)` behind `WebViewFeature` check — degrades gracefully (silently absent) when the device's WebView provider lacks the feature |
 | Geolocation / camera / mic auto-denied | `onGeolocationPermissionsShowPrompt` denies, `onPermissionRequest` denies; the Android permissions are also stripped in the manifest |
 | No form autofill / no saved passwords in the WebView | `saveFormData`/`savePassword` false; credential fill defers to the system autofill service (passgen/aegis path) |
-| Ephemeral sessions | cookies, storage, cache, history, form data wiped on Activity destroy |
-| SSL errors rejected hard; no popups, no file chooser, no downloads | `HardenedWebViewClient`/`HardenedWebChromeClient` |
+| Ephemeral sessions | cookies, storage, cache, history, form data wiped on Activity **destroy, or on the explicit "Clear now"** control — never merely "on leave". Switching apps does NOT clear the session (singleTask + recents-visible); the placeholder copy says so. |
+| SSL errors rejected hard; no popups, no file chooser | `HardenedWebViewClient`/`HardenedWebChromeClient` |
+| Downloads disabled | `DownloadListener` shows an honest snackbar with a "Download in Chrome" hand-off; no storage permission, view-only stays the policy |
+| Main-frame load failures render the app's own dark error panel | `onReceivedError`/`onReceivedHttpError` → custom panel with Retry + Open-in-default (no Chromium grey page) |
+| Screenshots blocked (`FLAG_SECURE`) | Core anti-emanation posture. **Trade-off:** you cannot screenshot a suspicious page to forward it — the report-the-scam path is *Open in default browser → screenshot there*. An `ALLOW_SCREENSHOTS` override exists in `TestingMode` for eng builds only; prod never exposes it. |
 
-The overlay-proxy plumbing (ProxyScreen + `overlay-i2p`/`overlay-lokinet`/`overlay-yggdrasil`) rides on WebView `ProxyController` and is orthogonal to the hardening above.
+The overlay-proxy surface (`ProxyScreen` + `overlay-i2p`) rides on WebView `ProxyController` and is orthogonal to the hardening above. I2P is the only doctrine-compatible overlay (userspace SOCKS/HTTP, never the VpnService slot); the Lokinet/Yggdrasil VpnService/TUN cards were dropped from the browser. **The whole proxy surface is eng-gated** — a prod build shows no proxy entry point at all (phase α bundles no I2P binary, so there is nothing honest to show).
 
 ## Build
 

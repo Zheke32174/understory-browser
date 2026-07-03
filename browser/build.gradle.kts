@@ -83,9 +83,12 @@ android {
 
 dependencies {
     implementation(project(":common-security"))
+    // I2P is the only doctrine-compatible overlay (userspace SOCKS/HTTP,
+    // never the VpnService slot). The Lokinet + Yggdrasil modules are
+    // VpnService/TUN designs and are no longer a browser dependency —
+    // v2 dropped their cards from the (eng-only) proxy surface. The
+    // proxy surface itself is eng-gated; a prod build shows nothing.
     implementation(project(":overlay-i2p"))
-    implementation(project(":overlay-lokinet"))
-    implementation(project(":overlay-yggdrasil"))
 
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)

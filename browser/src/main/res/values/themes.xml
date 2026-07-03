@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pre-Compose window theme. Bars/background use the suite's Ink900 near-black
+  (matching UnderstoryTheme's dark background token) rather than pure black, so
+  the initial window frame does not flash a different shade than the Compose
+  content that paints over it. The full color system lives in
+  common-security ui/theme (UnderstoryTheme); this XML only styles the window
+  chrome that exists before setContent runs.
+-->
 <resources>
+    <color name="ink900">#FF0A0A0A</color>
     <style name="Theme.Browser" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:statusBarColor">@android:color/black</item>
-        <item name="android:navigationBarColor">@android:color/black</item>
+        <item name="android:windowBackground">@color/ink900</item>
+        <item name="android:statusBarColor">@color/ink900</item>
+        <item name="android:navigationBarColor">@color/ink900</item>
     </style>
 </resources>

@@ -1,4 +1,124 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Browser app strings. Suite-shared strings (cd_back, action_retry, …) live in
+  common-security/res/values/strings.xml; only browser-specific copy is here.
+  Naming mirrors the shared convention (S-2): cd_* a11y labels, action_*
+  buttons, msg_* inline copy, err_* error-panel titles.
+
+  Store-facing display name is "Understory Safe View" (design-v2 §Positioning).
+  The package id (com.understory.browser) is unchanged — only the label.
+-->
 <resources>
-    <string name="app_name">browser</string>
+    <string name="app_name">Safe View</string>
+    <!-- Chooser-entry verb for the share/VIEW aliases (reads a verb, not the app name). -->
+    <string name="alias_open_label">Open in Safe View</string>
+
+    <!-- URL bar / nav row -->
+    <string name="hint_url">https://</string>
+    <string name="action_go">Go</string>
+    <string name="cd_clear_url">Clear address</string>
+    <string name="cd_nav_back">Back</string>
+    <string name="cd_nav_forward">Forward</string>
+    <string name="cd_reload">Reload</string>
+    <string name="cd_stop">Stop loading</string>
+    <string name="cd_open_in_default">Open in default browser</string>
+    <string name="cd_bookmark_on">Remove bookmark</string>
+    <string name="cd_bookmark_off">Add bookmark</string>
+    <string name="cd_find_toggle">Find in page</string>
+    <string name="cd_copy_url">Copy address</string>
+
+    <!-- Find bar -->
+    <string name="hint_find">Find in page</string>
+    <string name="cd_find_prev">Previous match</string>
+    <string name="cd_find_next">Next match</string>
+
+    <!-- Toggle rows -->
+    <string name="js_on">JS: on (this site)</string>
+    <string name="js_off">JS: off (default)</string>
+    <string name="cd_js_toggle">JavaScript for this site: %1$s. Long-press to manage allowed sites.</string>
+    <string name="js_state_on">on</string>
+    <string name="js_state_off">off</string>
+    <string name="cookies_first_party">Cookies: 1st-party</string>
+    <string name="cookies_off">Cookies: off</string>
+    <string name="action_clear_now">Clear now</string>
+    <string name="action_bookmarks">Bookmarks (%1$d)</string>
+    <string name="action_diagnostics">Diagnostics</string>
+    <string name="action_proxy">Proxy</string>
+    <string name="action_proxy_i2p_ready">Proxy · I2P :%1$d</string>
+    <string name="action_proxy_starting">Proxy · starting</string>
+    <string name="action_proxy_err">Proxy · err</string>
+
+    <!-- Snackbars / toasts -->
+    <string name="msg_url_copied">Address copied</string>
+    <string name="msg_bookmarked">Bookmarked</string>
+    <string name="msg_bookmark_removed">Removed bookmark</string>
+    <string name="msg_bookmark_cap_dropped">Oldest bookmark removed (200 max)</string>
+    <string name="msg_cleared">Cleared: cookies, storage, history, and the current page.</string>
+    <string name="msg_downloads_disabled">Downloads are disabled in this viewer.</string>
+    <string name="action_download_in_chrome">Download in Chrome</string>
+    <string name="msg_blocked_scheme">Blocked a non-web link (%1$s:)</string>
+    <string name="msg_no_handler">No app to handle this</string>
+    <string name="msg_no_browser">No browser available</string>
+    <string name="chooser_open_in_browser">Open in browser</string>
+    <string name="msg_not_a_web_address">That doesn\'t look like a web address. Safe View doesn\'t search the web — paste a full link.</string>
+
+    <!-- Empty / placeholder -->
+    <string name="placeholder_main">Type an https:// URL above and tap Go.\n\nJS is off by default for every site — the JS toggle opts the current site in (persisted allowlist). Cookies: first-party only per toggle, third-party always blocked.\n\nCleared when you close the app, or tap Clear now. Switching apps does NOT clear it.\n\nSafe Browsing is on when the device\'s WebView provider supports it. Screenshots are blocked here; to capture a suspicious page, open it in your default browser.</string>
+
+    <!-- Intake interstitial -->
+    <string name="intake_heading">Open this link in the hardened viewer?</string>
+    <string name="intake_sub">JavaScript will be OFF. No cookies, no downloads, no location, camera, or mic. The link opens here, not in your normal browser.</string>
+    <string name="intake_source_from">Shared from: %1$s</string>
+    <string name="intake_source_unknown">Opened by another app</string>
+    <string name="intake_no_link">No link found in the shared text — paste a full link above.</string>
+    <string name="action_open_in_safe_view">Open in Safe View</string>
+    <string name="action_copy_link">Copy link</string>
+    <string name="action_cancel">Cancel</string>
+
+    <!-- First-run VIEW opt-in -->
+    <string name="optin_title">Also offer Safe View when you tap links?</string>
+    <string name="optin_body">You\'ll still pick it each time; it never becomes your default browser.</string>
+    <string name="action_optin_enable">Enable</string>
+    <string name="action_optin_not_now">Not now</string>
+
+    <!-- Custom error panel -->
+    <string name="err_host_lookup">Can\'t reach this site</string>
+    <string name="err_connect">Connection failed</string>
+    <string name="err_cleartext">This site is only available over insecure http, which Safe View blocks</string>
+    <string name="err_http">The site returned an error (%1$d)</string>
+    <string name="err_generic">Couldn\'t load this page</string>
+    <string name="action_retry">Retry</string>
+
+    <!-- JS allowlist screen -->
+    <string name="js_allowlist_title">Sites allowed to run JS</string>
+    <string name="js_allowlist_empty_title">No site is allowed to run JavaScript</string>
+    <string name="js_allowlist_empty_body">Safe View keeps JS off unless you turn it on for a specific site.</string>
+    <string name="cd_js_remove">Remove %1$s</string>
+    <string name="action_manage_js">Manage JavaScript sites</string>
+
+    <!-- Bookmarks screen -->
+    <string name="bookmarks_title">Bookmarks</string>
+    <string name="bookmarks_sub">%1$d saved. Persistent across app launches.</string>
+    <string name="bookmarks_empty_title">No bookmarks yet</string>
+    <string name="bookmarks_empty_body">Tap the star in the toolbar while a page is loaded to add one.</string>
+    <string name="cd_remove_bookmark">Remove bookmark %1$s</string>
+
+    <!-- Proxy screen (eng-only) -->
+    <string name="proxy_title">Network proxy</string>
+    <string name="proxy_sub">Optional overlay routing for this browser session (experimental).</string>
+    <string name="proxy_i2p_title">Route via I2P</string>
+    <string name="proxy_i2p_body">Tunnels this browser\'s HTTP traffic through a local I2P proxy. Other apps unaffected.</string>
+    <string name="proxy_status_idle">Idle — no proxy active</string>
+    <string name="proxy_status_missing">Not available in this build.</string>
+    <string name="proxy_status_starting">Starting I2P…</string>
+    <string name="proxy_status_ready">Ready · 127.0.0.1:%1$d</string>
+    <string name="proxy_status_error">Error: %1$s</string>
+
+    <!-- Integrity fatal -->
+    <string name="integrity_title">Integrity check failed</string>
+    <string name="integrity_reason">Safe View won\'t run on a modified system.</string>
+    <string name="action_exit">Exit</string>
+
+    <!-- Crash fallback -->
+    <string name="crash_title">Safe View crash</string>
 </resources>
