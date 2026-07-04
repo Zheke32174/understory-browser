@@ -88,6 +88,7 @@ android {
 
 dependencies {
     implementation(project(":common-security"))
+    implementation(project(":elevation"))
     // I2P is the only doctrine-compatible overlay (userspace SOCKS/HTTP,
     // never the VpnService slot). The Lokinet + Yggdrasil modules are
     // VpnService/TUN designs and are no longer a browser dependency —

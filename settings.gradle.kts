@@ -22,6 +22,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "browser"
 include(":common-security")
+include(":elevation")
 include(":overlay-i2p")
 include(":overlay-lokinet")
 include(":overlay-yggdrasil")
