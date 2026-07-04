@@ -526,6 +526,7 @@ private fun BrowserAppRoot(
     var showBookmarks by rememberSaveable { mutableStateOf(false) }
     var showJsAllowlist by rememberSaveable { mutableStateOf(false) }
     var showProxy by rememberSaveable { mutableStateOf(false) }
+    var showHardening by rememberSaveable { mutableStateOf(false) }
     var showTabs by rememberSaveable { mutableStateOf(false) }
     var pendingLoad by remember { mutableStateOf<String?>(null) }
 
@@ -596,6 +597,10 @@ private fun BrowserAppRoot(
                 onOpenProxy = {
                     Diagnostics.log("browser.AppRoot", "show proxy overlay")
                     showProxy = true
+                },
+                onOpenHardening = {
+                    Diagnostics.log("browser.AppRoot", "show hardening overlay")
+                    showHardening = true
                 },
                 bookmarks = bookmarks,
                 onBookmarkToggle = { url, title ->
@@ -714,6 +719,15 @@ private fun BrowserAppRoot(
                     ProxyScreen(onBack = { showProxy = false })
                 }
             }
+            if (showHardening) {
+                BackHandler { showHardening = false }
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    HardeningScreen(
+                        onBack = { showHardening = false },
+                        showSnack = showSnack,
+                    )
+                }
+            }
         }
     }
 }
@@ -727,6 +741,7 @@ private fun BrowserRoot(
     onOpenBookmarks: () -> Unit,
     onOpenJsAllowlist: () -> Unit,
     onOpenProxy: () -> Unit,
+    onOpenHardening: () -> Unit,
     bookmarks: List<Bookmark>,
     onBookmarkToggle: (url: String, title: String?) -> Unit,
     pendingLoad: String?,
@@ -1083,6 +1098,7 @@ private fun BrowserRoot(
                         onBookmarks = onOpenBookmarks,
                         onDiagnostics = onDiagnostics,
                         onProxy = onOpenProxy,
+                        onHardening = onOpenHardening,
                     )
                 }
             }
@@ -1493,6 +1509,7 @@ private fun OverflowMenu(
     onBookmarks: () -> Unit,
     onDiagnostics: () -> Unit,
     onProxy: () -> Unit,
+    onHardening: () -> Unit,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         MenuRow(Icons.Filled.Share, stringResource(R.string.menu_share), enabled = hasPage) {
@@ -1524,6 +1541,12 @@ private fun OverflowMenu(
         ) { onDismiss(); onToggleCookies() }
         MenuRow(Icons.Filled.Tune, stringResource(R.string.menu_manage_js), enabled = true) {
             onDismiss(); onManageJs()
+        }
+        // Hardening — the elevated (Shizuku-gated) browser-hygiene surface. Always
+        // listed (not eng-gated): the screen itself fails closed to the grant
+        // invite when Shizuku isn't granted, so the entry is never a dead end.
+        MenuRow(Icons.Filled.Shield, stringResource(R.string.menu_hardening), enabled = true) {
+            onDismiss(); onHardening()
         }
         HorizontalDivider()
         MenuRow(Icons.Filled.Bookmarks, stringResource(R.string.menu_bookmarks, bookmarkCount), enabled = true) {

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Browser Hardening screen strings. Feature-scoped file (do not fold into the
+  shared strings.xml). Naming mirrors the suite convention: cd_* a11y labels,
+  action_* buttons, hard_* feature copy, err_* failures. Every elevated action
+  here is opt-in and reversible; the copy stays honest about that.
+-->
+<resources>
+    <!-- Entry point + screen chrome -->
+    <string name="menu_hardening">Hardening</string>
+    <string name="hard_title">Hardening</string>
+    <string name="hard_sub">Optional, reversible browser-hygiene actions. These need Shizuku; without it the app stays fully functional in its rootless posture and these controls are hidden.</string>
+
+    <!-- Elevation invite (shown when not elevated) -->
+    <string name="hard_unlock_browsers">Strip camera / mic / location from another browser</string>
+    <string name="hard_unlock_freeze">Freeze a flagged app (reversible)</string>
+    <string name="hard_unlock_dns">Pin strict Private DNS (reversible)</string>
+    <string name="hard_rootless_fallback">Without Shizuku, revoke these permissions by hand in Android Settings › Apps, and set Private DNS in Settings › Network.</string>
+    <string name="hard_open_app_settings">Open App info</string>
+
+    <!-- Section 1: strip risky perms from other browsers -->
+    <string name="hard_browsers_header">Other browsers</string>
+    <string name="hard_browsers_body">Pick another installed browser and turn off camera, microphone, or location for it. Each is reversible — the app can request the permission again, and you can re-grant it in Settings.</string>
+    <string name="hard_browsers_empty">No other browsers found on this device.</string>
+    <string name="hard_browsers_pick">Choose a browser</string>
+    <string name="hard_perm_camera">Camera</string>
+    <string name="hard_perm_mic">Microphone</string>
+    <string name="hard_perm_location">Location</string>
+    <string name="hard_perm_revoke">Turn off</string>
+    <string name="hard_perm_confirm_title">Turn off %1$s for %2$s?</string>
+    <string name="hard_perm_confirm_body">This revokes the %1$s permission from %2$s and tells Android to ignore its %1$s app-op. It is reversible: %2$s can prompt for it again, and you can re-grant it in Settings › Apps › %2$s › Permissions.</string>
+    <string name="hard_perm_done">%1$s turned off for %2$s.</string>
+
+    <!-- Section 2: freeze a flagged app -->
+    <string name="hard_freeze_header">Freeze a flagged app</string>
+    <string name="hard_freeze_body">Suspend an app tied to a bad link. A suspended app is greyed out and cannot launch until you unfreeze it. This never uninstalls anything.</string>
+    <string name="hard_freeze_pick">Choose an app to freeze</string>
+    <string name="hard_freeze_action">Freeze</string>
+    <string name="hard_unfreeze_action">Unfreeze</string>
+    <string name="hard_freeze_forcestop">Also force-stop it now</string>
+    <string name="hard_freeze_confirm_title">Freeze %1$s?</string>
+    <string name="hard_freeze_confirm_body">%1$s will be suspended — greyed out and unable to launch — until you unfreeze it here. Nothing is uninstalled. Reversible.</string>
+    <string name="hard_freeze_done">%1$s frozen.</string>
+    <string name="hard_unfreeze_done">%1$s unfrozen.</string>
+    <string name="hard_forcestop_done">%1$s force-stopped.</string>
+
+    <!-- Section 3: private DNS pin -->
+    <string name="hard_dns_header">Private DNS pin</string>
+    <string name="hard_dns_body">Pin the system to a strict (hostname) Private DNS resolver. Enter a DoT hostname, e.g. dns.example.com.</string>
+    <string name="hard_dns_warning">Warning: a system Private DNS change is device-wide and can shadow Tailscale MagicDNS. Use Restore to return to the previous setting.</string>
+    <string name="hard_dns_hint">DNS-over-TLS hostname</string>
+    <string name="hard_dns_current">Current: %1$s</string>
+    <string name="hard_dns_current_unknown">Current setting: unavailable</string>
+    <string name="hard_dns_pin">Pin this hostname</string>
+    <string name="hard_dns_restore">Restore</string>
+    <string name="hard_dns_pin_confirm_title">Pin Private DNS to %1$s?</string>
+    <string name="hard_dns_pin_confirm_body">This sets the device-wide Private DNS to strict mode with the host %1$s. It affects every app and can shadow Tailscale MagicDNS. Reversible via Restore.</string>
+    <string name="hard_dns_pinned">Private DNS pinned to %1$s.</string>
+    <string name="hard_dns_restored">Private DNS restored.</string>
+    <string name="hard_dns_need_host">Enter a DNS hostname first.</string>
+
+    <!-- Shared outcome copy -->
+    <string name="hard_outcome_unsupported">Not available: %1$s</string>
+    <string name="hard_outcome_failed">Failed: %1$s</string>
+    <string name="cd_hardening">Browser hardening</string>
+</resources>

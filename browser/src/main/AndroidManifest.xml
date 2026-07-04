@@ -119,6 +119,24 @@
     <uses-permission android:name="android.permission.WRITE_CALENDAR" tools:node="remove" />
 
     <queries>
+        <!-- Hardening screen: enumerate other installed browsers (apps that
+             handle an http/https VIEW) and launchable apps to freeze. Scoped
+             intent filters (NOT QUERY_ALL_PACKAGES) keep package visibility
+             minimal while letting queryIntentActivities see these targets. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
         <!-- Suite siblings — needed for SuiteAttestation cross-verification
              and for SuiteCapabilityRegistry peer discovery. -->
         <package android:name="com.understory.passgen" />
