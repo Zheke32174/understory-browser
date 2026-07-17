@@ -1,0 +1,38 @@
+apiVersion: modos.pleiades/v1alpha1
+kind: Component
+metadata:
+  name: understory-secure-browser
+  repository: Zheke32174/understory-browser
+  visibility: public
+  lifecycle: experimental
+  defaultBranch: main
+spec:
+  roles:
+    - secure-browser-app
+    - untrusted-content-boundary
+    - mobile-retrieval-interface
+  authority: local-enforcement
+  inputs:
+    - user-navigation-intent
+    - remote-untrusted-content
+    - local-browser-policy
+  outputs:
+    - rendered-content
+    - provenance-tagged-retrieval-events
+    - security-observations
+  capabilitiesProvided:
+    - content.web.retrieve
+    - content.untrusted.render
+    - browser.security.observe
+  capabilitiesRequired:
+    - network.web.scoped
+    - policy.browser.read
+    - context.immunity.attach
+    - audit.append
+  dataClasses:
+    - public
+    - private
+    - untrusted
+  failurePolicy: quarantine
+  promotionPolicy: signed-pr
+  notes: Remote content remains untrusted through rendering, extraction, summarization, and handoff into the wider MODOS context pipeline.
